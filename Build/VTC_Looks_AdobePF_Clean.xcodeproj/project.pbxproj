@@ -1,0 +1,249 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		BF0001100000000100000001 /* VTC_Looks_AdobePF.cpp in Sources */ = {isa = PBXBuildFile; fileRef = BF0001010000000100000001 /* VTC_Looks_AdobePF.cpp */; };
+		BF0001110000000100000001 /* VTC_FrameMap_AdobePF.cpp in Sources */ = {isa = PBXBuildFile; fileRef = BF0001020000000100000001 /* VTC_FrameMap_AdobePF.cpp */; };
+		BF0001120000000100000001 /* VTC_ParamMap_AdobePF.cpp in Sources */ = {isa = PBXBuildFile; fileRef = BF0001030000000100000001 /* VTC_ParamMap_AdobePF.cpp */; };
+		BF0001130000000100000001 /* VTC_EmbeddedLUTs.cpp in Sources */ = {isa = PBXBuildFile; fileRef = BF0001040000000100000001 /* VTC_EmbeddedLUTs.cpp */; };
+		BF0001140000000100000001 /* VTC_LUTSampling.cpp in Sources */ = {isa = PBXBuildFile; fileRef = BF0001050000000100000001 /* VTC_LUTSampling.cpp */; };
+		BF0001150000000100000001 /* VTC_CopyUtils.cpp in Sources */ = {isa = PBXBuildFile; fileRef = BF0001060000000100000001 /* VTC_CopyUtils.cpp */; };
+		BF0001260000000100000001 /* VTC_Looks_AdobePF_CleanPiPL.r in Rez */ = {isa = PBXBuildFile; fileRef = BF00010A0000000100000001 /* VTC_Looks_AdobePF_CleanPiPL.r */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		BF0001000000000100000001 /* VTC_Looks_AdobePF_Clean.plugin */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VTC_Looks_AdobePF_Clean.plugin; sourceTree = BUILT_PRODUCTS_DIR; };
+		BF0001010000000100000001 /* VTC_Looks_AdobePF.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "../Plugin/Hosts/AdobePF/VTC_Looks_AdobePF.cpp"; sourceTree = SOURCE_ROOT; };
+		BF0001020000000100000001 /* VTC_FrameMap_AdobePF.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "../Plugin/Hosts/AdobePF/VTC_FrameMap_AdobePF.cpp"; sourceTree = SOURCE_ROOT; };
+		BF0001030000000100000001 /* VTC_ParamMap_AdobePF.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "../Plugin/Hosts/AdobePF/VTC_ParamMap_AdobePF.cpp"; sourceTree = SOURCE_ROOT; };
+		BF0001040000000100000001 /* VTC_EmbeddedLUTs.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "../Plugin/Core/VTC_EmbeddedLUTs.cpp"; sourceTree = SOURCE_ROOT; };
+		BF0001050000000100000001 /* VTC_LUTSampling.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "../Plugin/Core/VTC_LUTSampling.cpp"; sourceTree = SOURCE_ROOT; };
+		BF0001060000000100000001 /* VTC_CopyUtils.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "../Plugin/Core/VTC_CopyUtils.cpp"; sourceTree = SOURCE_ROOT; };
+		BF0001070000000100000001 /* VTC_AdobePF_Includes.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "../Plugin/Hosts/AdobePF/VTC_AdobePF_Includes.h"; sourceTree = SOURCE_ROOT; };
+		BF0001080000000100000001 /* VTC_LUTData_Log.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "../Plugin/Shared/VTC_LUTData_Log.h"; sourceTree = SOURCE_ROOT; };
+		BF0001090000000100000001 /* VTC_LUTData_Rec709.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "../Plugin/Shared/VTC_LUTData_Rec709.h"; sourceTree = SOURCE_ROOT; };
+		BF00010A0000000100000001 /* VTC_Looks_AdobePF_CleanPiPL.r */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.rez; path = "../Plugin/Hosts/AdobePF/VTC_Looks_AdobePF_CleanPiPL.r"; sourceTree = SOURCE_ROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		BF0000F00000000100000001 = {
+			isa = PBXGroup;
+			children = (
+				BF0001010000000100000001 /* VTC_Looks_AdobePF.cpp */,
+				BF0001020000000100000001 /* VTC_FrameMap_AdobePF.cpp */,
+				BF0001030000000100000001 /* VTC_ParamMap_AdobePF.cpp */,
+				BF0001040000000100000001 /* VTC_EmbeddedLUTs.cpp */,
+				BF0001050000000100000001 /* VTC_LUTSampling.cpp */,
+				BF0001060000000100000001 /* VTC_CopyUtils.cpp */,
+				BF0001070000000100000001 /* VTC_AdobePF_Includes.h */,
+				BF0001080000000100000001 /* VTC_LUTData_Log.h */,
+				BF0001090000000100000001 /* VTC_LUTData_Rec709.h */,
+				BF00010A0000000100000001 /* VTC_Looks_AdobePF_CleanPiPL.r */,
+				BF0001000000000100000001 /* VTC_Looks_AdobePF_Clean.plugin */,
+			);
+			sourceTree = SOURCE_ROOT;
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		BF0000F10000000100000001 /* VTC_Looks_AdobePF_Clean */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BF0001200000000100000001 /* Build configuration list for PBXNativeTarget "VTC_Looks_AdobePF_Clean" */;
+			buildPhases = (
+				BF0001160000000100000001 /* Verify AE SDK */,
+				BF0000F20000000100000001 /* Sources */,
+				BF0001270000000100000001 /* Rez */,
+				BF0001170000000100000001 /* Install */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = VTC_Looks_AdobePF_Clean;
+			productName = VTC_Looks_AdobePF_Clean;
+			productReference = BF0001000000000100000001 /* VTC_Looks_AdobePF_Clean.plugin */;
+			productType = "com.apple.product-type.bundle";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		BF0000E00000000100000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastUpgradeCheck = 1430;
+				ORGANIZATIONNAME = "VTC";
+			};
+			buildConfigurationList = BF0001210000000100000001 /* Build configuration list for PBXProject "VTC_Looks_AdobePF_Clean" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			mainGroup = BF0000F00000000100000001;
+			productRefGroup = BF0000F00000000100000001;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				BF0000F10000000100000001 /* VTC_Looks_AdobePF_Clean */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		BF0001160000000100000001 /* Verify AE SDK */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = ();
+			outputPaths = ();
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -e\nif [ ! -f \"$AE_SDK_ROOT/Examples/Headers/AEConfig.h\" ]; then echo \"Missing AEConfig.h under $AE_SDK_ROOT/Examples/Headers\" >&2; exit 1; fi\nif [ ! -f \"$AE_SDK_ROOT/Examples/Headers/AE_Effect.h\" ]; then echo \"Missing AE_Effect.h under $AE_SDK_ROOT/Examples/Headers\" >&2; exit 1; fi\nls \"$AE_SDK_ROOT/Examples/Headers/AEConfig.h\"\nls \"$AE_SDK_ROOT/Examples/Headers/AE_Effect.h\"\n";
+		};
+		BF0001170000000100000001 /* Install */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = ();
+			outputPaths = ();
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -e\nDEST=\"$HOME/Library/Application Support/Adobe/Common/Plug-ins/7.0/MediaCore/VTC Looks\"\nmkdir -p \"$DEST\"\nrsync -a --delete \"$BUILT_PRODUCTS_DIR/$FULL_PRODUCT_NAME\" \"$DEST/\"\nINST=\"$DEST/$FULL_PRODUCT_NAME\"\necho \"Installed: $INST\"\nif command -v file >/dev/null 2>&1; then file \"$INST/Contents/MacOS/$(basename \"$FULL_PRODUCT_NAME\" .plugin)\"; fi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		BF0000F20000000100000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BF0001100000000100000001 /* VTC_Looks_AdobePF.cpp in Sources */,
+				BF0001110000000100000001 /* VTC_FrameMap_AdobePF.cpp in Sources */,
+				BF0001120000000100000001 /* VTC_ParamMap_AdobePF.cpp in Sources */,
+				BF0001130000000100000001 /* VTC_EmbeddedLUTs.cpp in Sources */,
+				BF0001140000000100000001 /* VTC_LUTSampling.cpp in Sources */,
+				BF0001150000000100000001 /* VTC_CopyUtils.cpp in Sources */,
+			);
+		};
+		BF0001270000000100000001 /* Rez */ = {
+			isa = PBXRezBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BF0001260000000100000001 /* VTC_Looks_AdobePF_CleanPiPL.r in Rez */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		BF0001220000000100000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				AE_SDK_ROOT = "/Users/victorbarbaian/Local Projects/VTC Looks/SDKs/Adobe/AfterEffectsSDK_25.6_61_mac/ae25.6_61.64bit.AfterEffectsSDK";
+				ARCHS = "$(ARCHS_STANDARD_64_BIT)";
+				CLANG_ENABLE_OBJC_ARC = NO;
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				DEAD_CODE_STRIPPING = YES;
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"$(AE_SDK_ROOT)/Examples/Headers\"",
+					"\"$(AE_SDK_ROOT)/Examples/Util\"",
+					"\"$(PROJECT_DIR)/../Plugin/Shared\"",
+					"\"$(PROJECT_DIR)/../Plugin/Core\"",
+					"\"$(PROJECT_DIR)/../Plugin/Hosts/AdobePF\"",
+				);
+				REZ_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"$(AE_SDK_ROOT)/Examples/Resources\"",
+					"\"$(AE_SDK_ROOT)/Examples/Headers\"",
+					"\"$(AE_SDK_ROOT)/Examples/Util\"",
+					"\"$(PROJECT_DIR)/../Plugin/Shared\"",
+					"\"$(PROJECT_DIR)/../Plugin/Core\"",
+					"\"$(PROJECT_DIR)/../Plugin/Hosts/AdobePF\"",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"\"$(AE_SDK_ROOT)/Libraries/Mac\"",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 11.0;
+				OTHER_LDFLAGS = "-bundle";
+				PRODUCT_NAME = "VTC_Looks_AdobePF_Clean";
+				SDKROOT = macosx;
+				WRAPPER_EXTENSION = plugin;
+				INFOPLIST_FILE = "../Plugin/Hosts/AdobePF/VTC_Looks_AdobePF_Clean_Info.plist";
+			};
+			name = Debug;
+		};
+		BF0001230000000100000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				AE_SDK_ROOT = "/Users/victorbarbaian/Local Projects/VTC Looks/SDKs/Adobe/AfterEffectsSDK_25.6_61_mac/ae25.6_61.64bit.AfterEffectsSDK";
+				ARCHS = "$(ARCHS_STANDARD_64_BIT)";
+				CLANG_ENABLE_OBJC_ARC = NO;
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				DEAD_CODE_STRIPPING = YES;
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"$(AE_SDK_ROOT)/Examples/Headers\"",
+					"\"$(AE_SDK_ROOT)/Examples/Util\"",
+					"\"$(PROJECT_DIR)/../Plugin/Shared\"",
+					"\"$(PROJECT_DIR)/../Plugin/Core\"",
+					"\"$(PROJECT_DIR)/../Plugin/Hosts/AdobePF\"",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"\"$(AE_SDK_ROOT)/Libraries/Mac\"",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 11.0;
+				OTHER_LDFLAGS = "-bundle";
+				PRODUCT_NAME = "VTC_Looks_AdobePF_Clean";
+				SDKROOT = macosx;
+				WRAPPER_EXTENSION = plugin;
+				INFOPLIST_FILE = "../Plugin/Hosts/AdobePF/VTC_Looks_AdobePF_Clean_Info.plist";
+			};
+			name = Release;
+		};
+		BF0001240000000100000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+			};
+			name = Debug;
+		};
+		BF0001250000000100000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		BF0001200000000100000001 /* Build configuration list for PBXNativeTarget "VTC_Looks_AdobePF_Clean" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BF0001220000000100000001 /* Debug */,
+				BF0001230000000100000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BF0001210000000100000001 /* Build configuration list for PBXProject "VTC_Looks_AdobePF_Clean" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BF0001240000000100000001 /* Debug */,
+				BF0001250000000100000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+	};
+	rootObject = BF0000E00000000100000001 /* Project object */;
+}

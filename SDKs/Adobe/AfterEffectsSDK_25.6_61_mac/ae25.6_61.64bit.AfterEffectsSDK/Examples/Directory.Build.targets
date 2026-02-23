@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <Target Name="CheckAEPluginBuildDir" BeforeTargets="PrepareForBuild">
+    <!-- Fail fast with a clear message if AE_PLUGIN_BUILD_DIR is not defined. -->
+    <Error Condition="'$(AE_PLUGIN_BUILD_DIR)'==''"
+           Text="AE_PLUGIN_BUILD_DIR is not set. Set it to your After Effects plug-ins folder (or another writable folder) so the sample projects can output .aex files. See: https://ae-plugins.docsforadobe.dev/intro/sample-projects/#building-the-sample-projects" />
+  </Target>
+</Project> 

@@ -1,0 +1,23 @@
+# macOS
+.DS_Store
+
+# Xcode derived data / build outputs
+Build/build/
+DerivedData/
+*.xcuserdatad/
+*.xcuserstate
+*.xcscmblueprint
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Logs
+*.log
+
+# Temporary archives
+*.zip
+*.tar
+*.gz
+*.tgz

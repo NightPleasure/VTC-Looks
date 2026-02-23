@@ -6,7 +6,7 @@
 namespace vtc {
 namespace pf {
 
-PF_Err MapWorldToFrame(const PF_EffectWorld* world, FrameDesc* out);
+PF_Err MapWorldToFrame(PF_InData* in_data, const PF_EffectWorld* world, FrameDesc* out);
 
 }  // namespace pf
 }  // namespace vtc

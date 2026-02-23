@@ -1,13 +1,11 @@
 #include "AEConfig.h"
-#include "AE_Effect.h"
 #include "AE_EffectVers.h"
-
 #ifndef AE_OS_WIN
     #include "AE_General.r"
 #endif
 
-#define VTC_OUTFLAGS   (PF_OutFlag_DEEP_COLOR_AWARE | PF_OutFlag_PIX_INDEPENDENT | PF_OutFlag_USE_OUTPUT_EXTENT | PF_OutFlag_WIDE_TIME_INPUT)
-#define VTC_OUTFLAGS_2 (PF_OutFlag2_FLOAT_COLOR_AWARE)
+#define VTC_OUTFLAGS   33555522 /* DEEP_COLOR_AWARE | PIX_INDEPENDENT | USE_OUTPUT_EXTENT | WIDE_TIME_INPUT */
+#define VTC_OUTFLAGS_2 4096     /* FLOAT_COLOR_AWARE */
 
 resource 'PiPL' (16000) {
     {
@@ -26,7 +24,7 @@ resource 'PiPL' (16000) {
 #endif
         AE_PiPL_Version { 2, 0 },
         AE_Effect_Spec_Version { PF_PLUG_IN_VERSION, PF_PLUG_IN_SUBVERS },
-        AE_Effect_Version { PF_VERSION(1, 0, 0, 0, 0) },
+        AE_Effect_Version { 1 },
         AE_Effect_Info_Flags { 0 },
         AE_Effect_Global_OutFlags { VTC_OUTFLAGS },
         AE_Effect_Global_OutFlags_2 { VTC_OUTFLAGS_2 },

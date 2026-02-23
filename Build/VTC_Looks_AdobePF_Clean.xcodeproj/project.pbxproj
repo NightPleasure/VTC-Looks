@@ -110,7 +110,7 @@
 			outputPaths = ();
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "set -e\nDEST=\"$HOME/Library/Application Support/Adobe/Common/Plug-ins/7.0/MediaCore/VTC Looks\"\nmkdir -p \"$DEST\"\nrsync -a --delete \"$BUILT_PRODUCTS_DIR/$FULL_PRODUCT_NAME\" \"$DEST/\"\nINST=\"$DEST/$FULL_PRODUCT_NAME\"\necho \"Installed: $INST\"\nif command -v file >/dev/null 2>&1; then file \"$INST/Contents/MacOS/$(basename \"$FULL_PRODUCT_NAME\" .plugin)\"; fi\n";
+			shellScript = "DEST=\"$HOME/Library/Application Support/Adobe/Common/Plug-ins/7.0/MediaCore/VTC Looks\"\nmkdir -p \"$DEST\" 2>/dev/null || true\nif [ -d \"$DEST\" ]; then\n  rsync -a \"$BUILT_PRODUCTS_DIR/$FULL_PRODUCT_NAME\" \"$DEST/\" && echo \"Installed: $DEST/$FULL_PRODUCT_NAME\" || echo \"[warn] rsync copy failed (install skipped)\"\n  if command -v file >/dev/null 2>&1; then file \"$DEST/$FULL_PRODUCT_NAME/Contents/MacOS/$(basename \"$FULL_PRODUCT_NAME\" .plugin)\"; fi\nelse\n  echo \"[warn] Install skipped; destination not available: $DEST\"\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -166,11 +166,10 @@
 					"\"$(PROJECT_DIR)/../Plugin/Core\"",
 					"\"$(PROJECT_DIR)/../Plugin/Hosts/AdobePF\"",
 				);
-				LIBRARY_SEARCH_PATHS = (
-					"\"$(AE_SDK_ROOT)/Libraries/Mac\"",
-				);
+				LIBRARY_SEARCH_PATHS = "";
 				MACOSX_DEPLOYMENT_TARGET = 11.0;
 				OTHER_LDFLAGS = "-bundle";
+				PRODUCT_BUNDLE_IDENTIFIER = com.vtclooks.cpu;
 				PRODUCT_NAME = "VTC_Looks_AdobePF_Clean";
 				SDKROOT = macosx;
 				WRAPPER_EXTENSION = plugin;
@@ -197,11 +196,19 @@
 					"\"$(PROJECT_DIR)/../Plugin/Core\"",
 					"\"$(PROJECT_DIR)/../Plugin/Hosts/AdobePF\"",
 				);
-				LIBRARY_SEARCH_PATHS = (
-					"\"$(AE_SDK_ROOT)/Libraries/Mac\"",
+				REZ_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"$(AE_SDK_ROOT)/Examples/Resources\"",
+					"\"$(AE_SDK_ROOT)/Examples/Headers\"",
+					"\"$(AE_SDK_ROOT)/Examples/Util\"",
+					"\"$(PROJECT_DIR)/../Plugin/Shared\"",
+					"\"$(PROJECT_DIR)/../Plugin/Core\"",
+					"\"$(PROJECT_DIR)/../Plugin/Hosts/AdobePF\"",
 				);
+				LIBRARY_SEARCH_PATHS = "";
 				MACOSX_DEPLOYMENT_TARGET = 11.0;
 				OTHER_LDFLAGS = "-bundle";
+				PRODUCT_BUNDLE_IDENTIFIER = com.vtclooks.cpu;
 				PRODUCT_NAME = "VTC_Looks_AdobePF_Clean";
 				SDKROOT = macosx;
 				WRAPPER_EXTENSION = plugin;

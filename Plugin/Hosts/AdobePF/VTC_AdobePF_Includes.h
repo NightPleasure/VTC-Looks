@@ -1,15 +1,16 @@
 #pragma once
 
 // Umbrella include for Adobe PF host wrapper. Guards against accidental Premiere headers.
-#ifdef __has_include
-#  if __has_include("PrSDKAESupport.h")
-#    error "Premiere headers must not be included in the AdobePF CPU target."
-#  endif
+#if defined(PrSDKAESupport_H) || defined(PRSDKAESUPPORT_H) || defined(PRSDKAESUPPORT_HEADER)
+#  error "Premiere headers must not be included in the AdobePF CPU target."
 #endif
 
 #include "AEConfig.h"
 #include "AE_Effect.h"
 #include "AE_EffectCB.h"
+#include "AE_EffectCBSuites.h"
+#include "AE_EffectPixelFormat.h"
+#include "SP/SPBasic.h"
 #include "Param_Utils.h"
 
 #ifndef DllExport
@@ -31,4 +32,3 @@
 #else
 #  define VTC_LOG(fmt, ...)
 #endif
-

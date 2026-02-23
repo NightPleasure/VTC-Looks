@@ -19,16 +19,21 @@ static const char* BuildLookPopup() {
 
 PF_Err AddParams(PF_InData* in_data, PF_OutData* out_data) {
     PF_Err err = PF_Err_NONE;
+    PF_ParamDef def;
 
-    PF_ADD_CHECKBOX("Enable", "Off", "On", TRUE, 0, kParam_Enable);
+    AEFX_CLR_STRUCT(def);
+    PF_ADD_CHECKBOX("Enable", "On", TRUE, 0, kParam_Enable);
 
+    AEFX_CLR_STRUCT(def);
     const char* categoryPopup = BuildPopupList(nullptr, kLookCategoryCount);
     PF_ADD_POPUP("Primary Category", kLookCategoryCount, 1, categoryPopup, kParam_PrimaryCategory);
 
+    AEFX_CLR_STRUCT(def);
     const char* lookPopup = BuildLookPopup();
     PF_ADD_POPUP("Primary Look", kLookEntryCount, 1, lookPopup, kParam_PrimaryLook);
 
-    PF_ADD_FLOAT_SLIDER("Primary Intensity", 0, 100, 0, 100, 100, 1, 1, 0, kParam_PrimaryIntensity);
+    AEFX_CLR_STRUCT(def);
+    PF_ADD_FLOAT_SLIDER("Primary Intensity", 0, 100, 0, 100, 100, 100, 1, 0, 0, kParam_PrimaryIntensity);
 
     out_data->num_params = kParam_Count;
     (void)in_data;

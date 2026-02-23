@@ -2,7 +2,7 @@
 
 ## Prereqs
 - Xcode 14+ on macOS (arm64).
-- After Effects / Premiere Pro SDK headers and libs; set `AE_SDK_PATH` env to the SDK root (contains `Includes/` and `Libraries/Mac/`).
+- After Effects SDK headers and libs; set `AE_SDK_ROOT` env or project setting to the SDK root (contains `Examples/Headers` and `Libraries/Mac/`).
 
 ## Build (Xcode)
 1) Open `Build/VTC_Looks_AdobePF_Clean.xcodeproj` in Xcode.
@@ -27,3 +27,12 @@ codesign -dv --verbose=2 "/Users/victorbarbaian/Library/Application Support/Adob
 - Built as a Mach-O bundle (`.plugin`) with `-bundle`.
 - No GPU; CPU-only PF effect.  
 - If you need x86_64, add it to ARCHS/universal and rebuild.***
+
+## Runtime smoke checklist (AE)
+- Launch AE, let it rescan plug-ins.
+- Effect shows as **VTC Looks** in the Effects list.
+- Disabled: output matches input (copy-through).
+- Enabled + Identity look: visually unchanged.
+- Enabled + Film Warm / Cool Fade: visible color change.
+- Test 8/16/32f layers if available; expect valid output.
+- Alpha preserved (no fringe or transparency corruption).

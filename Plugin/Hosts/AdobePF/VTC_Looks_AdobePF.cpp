@@ -21,8 +21,8 @@ static PF_Err Render(PF_InData* in_data, PF_OutData* out_data, PF_ParamDef* para
     FrameDesc src{};
     FrameDesc dst{};
 
-    PF_Err err = MapWorldToFrame(&params[kParam_Input]->u.ld, &src);
-    err = (err == PF_Err_NONE) ? MapWorldToFrame(output, &dst) : err;
+    PF_Err err = MapWorldToFrame(in_data, &params[kParam_Input]->u.ld, &src);
+    err = (err == PF_Err_NONE) ? MapWorldToFrame(in_data, output, &dst) : err;
 
     if (err != PF_Err_NONE) {
         return err;
@@ -31,13 +31,6 @@ static PF_Err Render(PF_InData* in_data, PF_OutData* out_data, PF_ParamDef* para
     const ParamsSnapshot snap = ReadParams(const_cast<const PF_ParamDef* const*>(params));
 
     ProcessFrameCPU(snap, src, dst);
-
-    // Check for user abort periodically – lightweight for this small pass.
-    if (!(in_data->abort_ptr == nullptr)) {
-        if (*in_data->abort_ptr) {
-            return PF_Err_ABORTED;
-        }
-    }
 
     return PF_Err_NONE;
 }

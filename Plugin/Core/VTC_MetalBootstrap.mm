@@ -21,19 +21,20 @@ namespace metal {
 
 namespace {
 
-id<MTLDevice>               g_device     = nil;
-id<MTLCommandQueue>         g_queue      = nil;
-id<MTLComputePipelineState> g_lutPSO     = nil;
-bool                        g_available  = false;
-bool                        g_pipelineOK = false;
+id<MTLDevice>               g_device      = nil;
+id<MTLCommandQueue>         g_queue       = nil;
+id<MTLComputePipelineState> g_lutPSO_8    = nil;
+id<MTLComputePipelineState> g_lutPSO_32f  = nil;
+bool                        g_available   = false;
+bool                        g_pipeline8OK = false;
+bool                        g_pipeline32OK = false;
 dispatch_once_t             g_ctxOnce;
 dispatch_once_t             g_psoOnce;
 
-// ── GPU LUT kernel (8bpc, 1..4 layers) ───────────────────────────────
-// Matches CPU: sequential trilinear LUT sampling + per-layer intensity blend.
-// All layers' data packed into one buffer; per-layer offset/dim/scale/intensity
-// passed via the params struct.
-// Layer application order is preserved: Log → Creative → Secondary → Accent.
+// ── GPU LUT kernels ──────────────────────────────────────────────────
+// Both kernels share the sampleLUT helper and struct definitions.
+// lut_apply_8bpc:  8bpc ARGB8 pixels (uchar4), 1..4 layers
+// lut_apply_32bpc: 32bpc ARGB float pixels (float4), 1 layer only
 NSString* const kLUTShaderSource = @R"MSL(
 #include <metal_stdlib>
 using namespace metal;
@@ -48,7 +49,7 @@ struct LayerDesc {
 struct LUTParams {
     uint  width;
     uint  height;
-    uint  srcStride;   // row stride in uchar4 (pixel) units
+    uint  srcStride;   // row stride in pixel units (uchar4 for 8bpc, float4 for 32bpc)
     uint  dstStride;
     uint  layerCount;  // 1..4
     uint  _pad0;
@@ -72,7 +73,6 @@ inline float3 sampleLUT(device const float* lut, uint baseOff,
     float dy = fy - float(y0);
     float dz = fz - float(z0);
 
-    // ((z*dim+y)*dim+x)*3 → R,G,B
     #define LF(xi,yi,zi) ({ \
         int _i = baseOff + ((zi * dim + yi) * dim + xi) * 3; \
         float3(lut[_i], lut[_i+1], lut[_i+2]); })
@@ -94,6 +94,8 @@ inline float3 sampleLUT(device const float* lut, uint baseOff,
     return mix(c0, c1, dz);
 }
 
+// ── 8bpc kernel (1..4 layers) ────────────────────────────────────────
+
 kernel void lut_apply_8bpc(
     device const uchar4* src [[buffer(0)]],
     device       uchar4* dst [[buffer(1)]],
@@ -114,12 +116,41 @@ kernel void lut_apply_8bpc(
         color = mix(color, lutColor, ld.intensity);
     }
 
-    // Quantize to 8-bit (matches CPU: clamp01 * 255 + 0.5, min 255, truncate)
     float3 q = clamp(color, 0.0f, 1.0f) * 255.0f + 0.5f;
     q = min(q, 255.0f);
 
     dst[gid.y * p.dstStride + gid.x] = uchar4(
         pixel.x, uchar(q.x), uchar(q.y), uchar(q.z));
+}
+
+// ── 32bpc kernel (single layer) ──────────────────────────────────────
+// AE 32bpc pixel layout: float4(A, R, G, B)
+// CPU reference: toFloat32 extracts (r, g, b) directly,
+//   fromFloat32 writes (a, clamp01(r), clamp01(g), clamp01(b)).
+
+kernel void lut_apply_32bpc(
+    device const float4* src [[buffer(0)]],
+    device       float4* dst [[buffer(1)]],
+    device const float*  lut [[buffer(2)]],
+    constant LUTParams&  p   [[buffer(3)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= p.width || gid.y >= p.height) return;
+
+    float4 pixel = src[gid.y * p.srcStride + gid.x];
+    float3 color = float3(pixel.y, pixel.z, pixel.w);  // R, G, B
+
+    LayerDesc ld = p.layers[0];
+    int dim   = int(ld.dim);
+    int dimM1 = dim - 1;
+    float3 lutColor = sampleLUT(lut, ld.lutOffset, dim, dimM1, ld.scale, color);
+    color = mix(color, lutColor, ld.intensity);
+
+    dst[gid.y * p.dstStride + gid.x] = float4(
+        pixel.x,                    // preserve alpha
+        clamp(color.x, 0.0f, 1.0f),
+        clamp(color.y, 0.0f, 1.0f),
+        clamp(color.z, 0.0f, 1.0f));
 }
 )MSL";
 
@@ -157,22 +188,99 @@ void InitPipeline() {
                  err ? [[err localizedDescription] UTF8String] : "unknown");
             return;
         }
-        id<MTLFunction> fn = [lib newFunctionWithName:@"lut_apply_8bpc"];
-        if (!fn) {
-            MLOG("function lookup failed");
-            return;
+
+        // 8bpc pipeline
+        id<MTLFunction> fn8 = [lib newFunctionWithName:@"lut_apply_8bpc"];
+        if (fn8) {
+            g_lutPSO_8 = [g_device newComputePipelineStateWithFunction:fn8 error:&err];
+            if (g_lutPSO_8) {
+                g_pipeline8OK = true;
+                MLOG("8bpc pipeline ready  tw=%lu  maxT=%lu",
+                     (unsigned long)g_lutPSO_8.threadExecutionWidth,
+                     (unsigned long)g_lutPSO_8.maxTotalThreadsPerThreadgroup);
+            } else {
+                MLOG("8bpc pipeline creation failed: %s",
+                     err ? [[err localizedDescription] UTF8String] : "unknown");
+            }
+        } else {
+            MLOG("8bpc function lookup failed");
         }
-        g_lutPSO = [g_device newComputePipelineStateWithFunction:fn error:&err];
-        if (!g_lutPSO) {
-            MLOG("pipeline creation failed: %s",
-                 err ? [[err localizedDescription] UTF8String] : "unknown");
-            return;
+
+        // 32bpc pipeline
+        id<MTLFunction> fn32 = [lib newFunctionWithName:@"lut_apply_32bpc"];
+        if (fn32) {
+            g_lutPSO_32f = [g_device newComputePipelineStateWithFunction:fn32 error:&err];
+            if (g_lutPSO_32f) {
+                g_pipeline32OK = true;
+                MLOG("32bpc pipeline ready  tw=%lu  maxT=%lu",
+                     (unsigned long)g_lutPSO_32f.threadExecutionWidth,
+                     (unsigned long)g_lutPSO_32f.maxTotalThreadsPerThreadgroup);
+            } else {
+                MLOG("32bpc pipeline creation failed: %s",
+                     err ? [[err localizedDescription] UTF8String] : "unknown");
+            }
+        } else {
+            MLOG("32bpc function lookup failed");
         }
-        g_pipelineOK = true;
-        MLOG("LUT pipeline ready  threadExecWidth=%lu  maxThreads=%lu",
-             (unsigned long)g_lutPSO.threadExecutionWidth,
-             (unsigned long)g_lutPSO.maxTotalThreadsPerThreadgroup);
     });
+}
+
+// ── Shared dispatch helper ───────────────────────────────────────────
+
+static bool dispatchKernel(id<MTLComputePipelineState> pso,
+                           const GPUParams& params,
+                           const void* srcData, void* dstData,
+                           int srcRowBytes, int dstRowBytes,
+                           int frameW, int frameH,
+                           const float* lutPacked, NSUInteger lutBytes)
+{
+    const NSUInteger srcSize = (NSUInteger)frameH * (NSUInteger)srcRowBytes;
+    const NSUInteger dstSize = (NSUInteger)frameH * (NSUInteger)dstRowBytes;
+
+    id<MTLBuffer> srcBuf = [g_device newBufferWithBytes:srcData
+                                                 length:srcSize
+                                                options:MTLResourceStorageModeShared];
+    id<MTLBuffer> dstBuf = [g_device newBufferWithLength:dstSize
+                                                 options:MTLResourceStorageModeShared];
+    id<MTLBuffer> lutBuf = [g_device newBufferWithBytes:lutPacked
+                                                 length:lutBytes
+                                                options:MTLResourceStorageModeShared];
+    if (!srcBuf || !dstBuf || !lutBuf) {
+        MLOG("dispatch fail: buffer alloc");
+        return false;
+    }
+
+    id<MTLCommandBuffer> cmdBuf = [g_queue commandBuffer];
+    if (!cmdBuf) { MLOG("dispatch fail: cmdBuf"); return false; }
+
+    id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
+    if (!enc) { MLOG("dispatch fail: encoder"); return false; }
+
+    [enc setComputePipelineState:pso];
+    [enc setBuffer:srcBuf offset:0 atIndex:0];
+    [enc setBuffer:dstBuf offset:0 atIndex:1];
+    [enc setBuffer:lutBuf offset:0 atIndex:2];
+    [enc setBytes:&params length:sizeof(params) atIndex:3];
+
+    NSUInteger tw = pso.threadExecutionWidth;
+    NSUInteger th = pso.maxTotalThreadsPerThreadgroup / tw;
+    MTLSize tgSize   = MTLSizeMake(tw, th, 1);
+    MTLSize gridSize = MTLSizeMake((NSUInteger)frameW, (NSUInteger)frameH, 1);
+
+    [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
+    [enc endEncoding];
+
+    [cmdBuf commit];
+    [cmdBuf waitUntilCompleted];
+
+    if (cmdBuf.status == MTLCommandBufferStatusError) {
+        MLOG("dispatch fail: GPU error: %s",
+             cmdBuf.error ? [[cmdBuf.error localizedDescription] UTF8String] : "unknown");
+        return false;
+    }
+
+    std::memcpy(dstData, dstBuf.contents, dstSize);
+    return true;
 }
 
 }  // anon namespace
@@ -208,17 +316,26 @@ bool TryDispatch(const GPUDispatchDesc& desc,
         return false;
     }
 
-    if (desc.bytesPerPixel != 4) {
-        MLOG("dispatch skip: unsupported bpp=%d", desc.bytesPerPixel);
-        return false;
-    }
-
     if (desc.layerCount < 1 || desc.layerCount > GPUDispatchDesc::kMaxLayers) {
         MLOG("dispatch skip: layerCount=%d out of range", desc.layerCount);
         return false;
     }
 
-    // Validate all layers before allocating anything
+    // ── Route by pixel format ──
+    const bool is8bpc  = (desc.bytesPerPixel == 4);
+    const bool is32bpc = (desc.bytesPerPixel == 16);
+
+    if (!is8bpc && !is32bpc) {
+        MLOG("dispatch skip: unsupported bpp=%d (16bpc stays on CPU)", desc.bytesPerPixel);
+        return false;
+    }
+
+    if (is32bpc && desc.layerCount != 1) {
+        MLOG("dispatch skip: 32bpc multi-layer not yet supported (layers=%d)", desc.layerCount);
+        return false;
+    }
+
+    // Validate all active layers
     NSUInteger totalLutFloats = 0;
     for (int i = 0; i < desc.layerCount; i++) {
         const auto& L = desc.layers[i];
@@ -230,30 +347,35 @@ bool TryDispatch(const GPUDispatchDesc& desc,
     }
 
     InitPipeline();
-    if (!g_pipelineOK) {
-        MLOG("dispatch skip: pipeline not ready");
-        return false;
+
+    id<MTLComputePipelineState> pso = nil;
+    if (is8bpc) {
+        if (!g_pipeline8OK) { MLOG("dispatch skip: 8bpc pipeline not ready"); return false; }
+        pso = g_lutPSO_8;
+    } else {
+        if (!g_pipeline32OK) { MLOG("dispatch skip: 32bpc pipeline not ready"); return false; }
+        pso = g_lutPSO_32f;
     }
 
     const int w = desc.frameWidth;
     const int h = desc.frameHeight;
     if (w <= 0 || h <= 0) return false;
 
-    const NSUInteger srcSize = (NSUInteger)h * (NSUInteger)srcRowBytes;
-    const NSUInteger dstSize = (NSUInteger)h * (NSUInteger)dstRowBytes;
     const NSUInteger lutBytes = totalLutFloats * sizeof(float);
 
     @autoreleasepool {
-        // ── Pack all LUT data into one contiguous host buffer ──
+        // Pack LUT data
         float* lutPacked = (float*)std::malloc(lutBytes);
         if (!lutPacked) { MLOG("dispatch fail: lutPacked malloc"); return false; }
 
         GPUParams params = {};
         params.width      = (uint32_t)w;
         params.height     = (uint32_t)h;
-        params.srcStride  = (uint32_t)(srcRowBytes / 4);
-        params.dstStride  = (uint32_t)(dstRowBytes / 4);
         params.layerCount = (uint32_t)desc.layerCount;
+
+        // Stride: pixels per row (rowBytes / bytesPerPixel)
+        params.srcStride = (uint32_t)(srcRowBytes / desc.bytesPerPixel);
+        params.dstStride = (uint32_t)(dstRowBytes / desc.bytesPerPixel);
 
         uint32_t floatOffset = 0;
         for (int i = 0; i < desc.layerCount; i++) {
@@ -268,57 +390,16 @@ bool TryDispatch(const GPUDispatchDesc& desc,
             floatOffset += (uint32_t)layerFloats;
         }
 
-        // ── Create Metal buffers ──
-        id<MTLBuffer> srcBuf = [g_device newBufferWithBytes:srcData
-                                                     length:srcSize
-                                                    options:MTLResourceStorageModeShared];
-        id<MTLBuffer> dstBuf = [g_device newBufferWithLength:dstSize
-                                                     options:MTLResourceStorageModeShared];
-        id<MTLBuffer> lutBuf = [g_device newBufferWithBytes:lutPacked
-                                                     length:lutBytes
-                                                    options:MTLResourceStorageModeShared];
+        bool ok = dispatchKernel(pso, params, srcData, dstData,
+                                 srcRowBytes, dstRowBytes, w, h,
+                                 lutPacked, lutBytes);
         std::free(lutPacked);
 
-        if (!srcBuf || !dstBuf || !lutBuf) {
-            MLOG("dispatch fail: buffer alloc (src=%p dst=%p lut=%p)",
-                 srcBuf, dstBuf, lutBuf);
-            return false;
+        if (ok) {
+            MLOG("dispatch OK: %dx%d  %dbpc  layers=%d",
+                 w, h, is8bpc ? 8 : 32, desc.layerCount);
         }
-
-        // ── Encode ──
-        id<MTLCommandBuffer> cmdBuf = [g_queue commandBuffer];
-        if (!cmdBuf) { MLOG("dispatch fail: cmdBuf"); return false; }
-
-        id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
-        if (!enc) { MLOG("dispatch fail: encoder"); return false; }
-
-        [enc setComputePipelineState:g_lutPSO];
-        [enc setBuffer:srcBuf offset:0 atIndex:0];
-        [enc setBuffer:dstBuf offset:0 atIndex:1];
-        [enc setBuffer:lutBuf offset:0 atIndex:2];
-        [enc setBytes:&params length:sizeof(params) atIndex:3];
-
-        NSUInteger tw = g_lutPSO.threadExecutionWidth;
-        NSUInteger th = g_lutPSO.maxTotalThreadsPerThreadgroup / tw;
-        MTLSize tgSize   = MTLSizeMake(tw, th, 1);
-        MTLSize gridSize = MTLSizeMake((NSUInteger)w, (NSUInteger)h, 1);
-
-        [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
-        [enc endEncoding];
-
-        [cmdBuf commit];
-        [cmdBuf waitUntilCompleted];
-
-        if (cmdBuf.status == MTLCommandBufferStatusError) {
-            MLOG("dispatch fail: GPU error: %s",
-                 cmdBuf.error ? [[cmdBuf.error localizedDescription] UTF8String] : "unknown");
-            return false;
-        }
-
-        std::memcpy(dstData, dstBuf.contents, dstSize);
-
-        MLOG("dispatch OK: %dx%d  8bpc  layers=%d", w, h, desc.layerCount);
-        return true;
+        return ok;
     }
 }
 

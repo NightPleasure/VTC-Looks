@@ -83,7 +83,7 @@ LUTCacheKey   g_lutCacheKey;
 // ── GPU LUT kernels ──────────────────────────────────────────────────
 // All kernels share the sampleLUT helper and LUTParams struct.
 // lut_apply_8bpc:  8bpc  ARGB8 pixels (uchar4),  1..4 layers
-// lut_apply_16bpc: 16bpc ARGB16 pixels (ushort4), 1 layer only
+// lut_apply_16bpc: 16bpc ARGB16 pixels (ushort4), 1..4 layers
 // lut_apply_32bpc: 32bpc ARGB float pixels (float4), 1 layer only
 NSString* const kLUTShaderSource = @R"MSL(
 #include <metal_stdlib>
@@ -173,7 +173,7 @@ kernel void lut_apply_8bpc(
         pixel.x, uchar(q.x), uchar(q.y), uchar(q.z));
 }
 
-// ── 16bpc kernel (single layer) ──────────────────────────────────────
+// ── 16bpc kernel (1..4 layers) ───────────────────────────────────────
 // AE 16bpc pixel layout: ushort4(A, R, G, B), range [0, 32768]
 // CPU reference: toFloat16 divides by 32768.0,
 //   fromFloat16 writes clamp01(v) * 32768.0 + 0.5, clamped to max 32768.
@@ -190,11 +190,13 @@ kernel void lut_apply_16bpc(
     ushort4 pixel = src[gid.y * p.srcStride + gid.x];
     float3 color = float3(float(pixel.y), float(pixel.z), float(pixel.w)) / 32768.0f;
 
-    LayerDesc ld = p.layers[0];
-    int dim   = int(ld.dim);
-    int dimM1 = dim - 1;
-    float3 lutColor = sampleLUT(lut, ld.lutOffset, dim, dimM1, ld.scale, color);
-    color = mix(color, lutColor, ld.intensity);
+    for (uint i = 0; i < p.layerCount; i++) {
+        LayerDesc ld = p.layers[i];
+        int dim   = int(ld.dim);
+        int dimM1 = dim - 1;
+        float3 lutColor = sampleLUT(lut, ld.lutOffset, dim, dimM1, ld.scale, color);
+        color = mix(color, lutColor, ld.intensity);
+    }
 
     float3 q = clamp(color, 0.0f, 1.0f) * 32768.0f + 0.5f;
     q = min(q, 32768.0f);
@@ -405,10 +407,6 @@ bool TryDispatch(const GPUDispatchDesc& desc,
         return false;
     }
 
-    if (is16bpc && desc.layerCount != 1) {
-        MLOG("dispatch skip: 16bpc multi-layer not yet supported (layers=%d)", desc.layerCount);
-        return false;
-    }
     if (is32bpc && desc.layerCount != 1) {
         MLOG("dispatch skip: 32bpc multi-layer not yet supported (layers=%d)", desc.layerCount);
         return false;

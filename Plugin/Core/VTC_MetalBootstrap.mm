@@ -84,7 +84,7 @@ LUTCacheKey   g_lutCacheKey;
 // All kernels share the sampleLUT helper and LUTParams struct.
 // lut_apply_8bpc:  8bpc  ARGB8 pixels (uchar4),  1..4 layers
 // lut_apply_16bpc: 16bpc ARGB16 pixels (ushort4), 1..4 layers
-// lut_apply_32bpc: 32bpc ARGB float pixels (float4), 1 layer only
+// lut_apply_32bpc: 32bpc ARGB float pixels (float4), 1..4 layers
 NSString* const kLUTShaderSource = @R"MSL(
 #include <metal_stdlib>
 using namespace metal;
@@ -205,7 +205,7 @@ kernel void lut_apply_16bpc(
         pixel.x, ushort(q.x), ushort(q.y), ushort(q.z));
 }
 
-// ── 32bpc kernel (single layer) ──────────────────────────────────────
+// ── 32bpc kernel (1..4 layers) ───────────────────────────────────────
 
 kernel void lut_apply_32bpc(
     device const float4* src [[buffer(0)]],
@@ -219,11 +219,13 @@ kernel void lut_apply_32bpc(
     float4 pixel = src[gid.y * p.srcStride + gid.x];
     float3 color = float3(pixel.y, pixel.z, pixel.w);
 
-    LayerDesc ld = p.layers[0];
-    int dim   = int(ld.dim);
-    int dimM1 = dim - 1;
-    float3 lutColor = sampleLUT(lut, ld.lutOffset, dim, dimM1, ld.scale, color);
-    color = mix(color, lutColor, ld.intensity);
+    for (uint i = 0; i < p.layerCount; i++) {
+        LayerDesc ld = p.layers[i];
+        int dim   = int(ld.dim);
+        int dimM1 = dim - 1;
+        float3 lutColor = sampleLUT(lut, ld.lutOffset, dim, dimM1, ld.scale, color);
+        color = mix(color, lutColor, ld.intensity);
+    }
 
     dst[gid.y * p.dstStride + gid.x] = float4(
         pixel.x,
@@ -404,11 +406,6 @@ bool TryDispatch(const GPUDispatchDesc& desc,
 
     if (!is8bpc && !is16bpc && !is32bpc) {
         MLOG("dispatch skip: unsupported bpp=%d", desc.bytesPerPixel);
-        return false;
-    }
-
-    if (is32bpc && desc.layerCount != 1) {
-        MLOG("dispatch skip: 32bpc multi-layer not yet supported (layers=%d)", desc.layerCount);
         return false;
     }
 

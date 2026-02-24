@@ -15,10 +15,9 @@ bool InitContext();
 bool IsAvailable();
 
 // GPU compute dispatch.
-// Supported: 8bpc 1..4 layers, 16bpc 1..4 layers, 32bpc 1 layer.
+// Supported: 8bpc 1..4 layers, 16bpc 1..4 layers, 32bpc 1..4 layers.
 // Returns true only if GPU successfully rendered the frame.
 // Returns false on any failure -- caller MUST fall back to CPU.
-// Unsupported cases (multi-layer 32bpc) return false immediately.
 bool TryDispatch(const GPUDispatchDesc& desc,
                  const void* srcData, void* dstData,
                  int srcRowBytes, int dstRowBytes);

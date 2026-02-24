@@ -14,7 +14,7 @@ bool InitContext();
 // Triggers InitContext() on first call.
 bool IsAvailable();
 
-// GPU compute dispatch. Phase 4: smoke passthrough (8bpc RGBA only).
+// GPU compute dispatch (8bpc, 1..4 active LUT layers).
 // Returns true only if GPU successfully rendered the frame.
 // Returns false on any failure -- caller MUST fall back to CPU.
 // Unsupported formats (16bpc, 32bpc) return false immediately.

@@ -1,4 +1,5 @@
 #include "VTC_LUTSampling.h"
+#include "VTC_RenderBackend.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -19,11 +20,18 @@ struct Pixel8  { std::uint8_t  a, r, g, b; };
 struct Pixel16 { std::uint16_t a, r, g, b; };
 struct Pixel32f { float a, r, g, b; };
 
-inline RGB sampleLUT(const LUT3D& lut, float r, float g, float b) {
-    const int   dim   = lut.dimension;
-    const int   dimM1 = dim - 1;
-    const float scale = static_cast<float>(dimM1);
-    const float* lutData = lut.data;
+struct ResolvedLayer {
+    const float* data;
+    int   dimension;
+    float scale;
+    float intensity;
+};
+
+inline RGB sampleLUT(const ResolvedLayer& layer, float r, float g, float b) {
+    const int    dim     = layer.dimension;
+    const int    dimM1   = dim - 1;
+    const float  scale   = layer.scale;
+    const float* lutData = layer.data;
 
     const float x = clamp01(r) * scale;
     const float y = clamp01(g) * scale;
@@ -59,18 +67,12 @@ inline RGB sampleLUT(const LUT3D& lut, float r, float g, float b) {
     return {lerp(c0.r,c1.r,fz), lerp(c0.g,c1.g,fz), lerp(c0.b,c1.b,fz)};
 }
 
-inline RGB applyLayer(const LUT3D& lut, float intensity, RGB color) {
-    const RGB lutRGB = sampleLUT(lut, color.r, color.g, color.b);
-    if (intensity >= 0.9999f) return lutRGB;
-    return {lerp(color.r, lutRGB.r, intensity),
-            lerp(color.g, lutRGB.g, intensity),
-            lerp(color.b, lutRGB.b, intensity)};
-}
-
-inline const LUT3D* resolveLayer(const LayerParams& lp, const LUT3D* table, int count) {
-    if (!lp.enabled || lp.lutIndex < 0 || lp.lutIndex >= count || lp.intensity <= 0.0001f)
-        return nullptr;
-    return &table[lp.lutIndex];
+inline RGB applyLayer(const ResolvedLayer& layer, RGB color) {
+    const RGB lutRGB = sampleLUT(layer, color.r, color.g, color.b);
+    if (layer.intensity >= 0.9999f) return lutRGB;
+    return {lerp(color.r, lutRGB.r, layer.intensity),
+            lerp(color.g, lutRGB.g, layer.intensity),
+            lerp(color.b, lutRGB.b, layer.intensity)};
 }
 
 inline RGB toFloat8(const Pixel8& p) {
@@ -102,23 +104,28 @@ inline Pixel32f fromFloat32(const RGB& c, float a) {
     return {a, clamp01(c.r), clamp01(c.g), clamp01(c.b)};
 }
 
-// Per-frame resolved state. The 4 null checks in processPixel are constant
-// for every pixel in the frame -- branch prediction handles them at zero cost.
-// TODO [GPU]: Replace with a compact array of active layers and dispatch count
-// to match Metal compute shader uniform layout.
 struct ActiveLayers {
-    const LUT3D* log      = nullptr; float logI      = 0.f;
-    const LUT3D* creative = nullptr; float creativeI = 0.f;
-    const LUT3D* secondary= nullptr; float secondaryI= 0.f;
-    const LUT3D* accent   = nullptr; float accentI   = 0.f;
-    bool any() const { return log || creative || secondary || accent; }
+    ResolvedLayer layers[4];
+    int count = 0;
+
+    void tryAdd(const LayerParams& lp, const LUT3D* table, int tableCount) {
+        if (!lp.enabled || lp.lutIndex < 0 || lp.lutIndex >= tableCount
+            || lp.intensity <= 0.0001f)
+            return;
+        const LUT3D& lut = table[lp.lutIndex];
+        ResolvedLayer& rl = layers[count++];
+        rl.data      = lut.data;
+        rl.dimension = lut.dimension;
+        rl.scale     = static_cast<float>(lut.dimension - 1);
+        rl.intensity = clamp01(lp.intensity);
+    }
+
+    bool any() const { return count > 0; }
 };
 
 inline RGB processPixel(RGB color, const ActiveLayers& al) {
-    if (al.log)       color = applyLayer(*al.log,       al.logI,       color);
-    if (al.creative)  color = applyLayer(*al.creative,  al.creativeI,  color);
-    if (al.secondary) color = applyLayer(*al.secondary, al.secondaryI, color);
-    if (al.accent)    color = applyLayer(*al.accent,    al.accentI,    color);
+    for (int i = 0; i < al.count; ++i)
+        color = applyLayer(al.layers[i], color);
     return color;
 }
 
@@ -141,26 +148,25 @@ void processTyped(const ActiveLayers& al, const FrameDesc& src, FrameDesc& dst,
 
 }  // namespace
 
-// TODO [GPU]: This function is the CPU fallback entry point.
-// Metal path will share ActiveLayers resolution but dispatch to a compute shader
-// instead of processTyped. LUT data will be uploaded as MTLBuffer once per
-// param change, not per frame.
 void ProcessFrameCPU(const ParamsSnapshot& params, const FrameDesc& src, FrameDesc& dst) {
     if (!IsSupported(src) || !IsSupported(dst) || !SameGeometry(src, dst)) {
         CopyFrame(src, dst); return;
     }
 
+    // Resolve active layers once per frame (order: Log -> Creative -> Secondary -> Accent)
     ActiveLayers al;
-    al.log       = resolveLayer(params.logConvert, kLogLUTs, kLogLUTCount);
-    al.logI      = clamp01(params.logConvert.intensity);
-    al.creative  = resolveLayer(params.creative,  kRec709LUTs, kRec709LUTCount);
-    al.creativeI = clamp01(params.creative.intensity);
-    al.secondary = resolveLayer(params.secondary, kRec709LUTs, kRec709LUTCount);
-    al.secondaryI= clamp01(params.secondary.intensity);
-    al.accent    = resolveLayer(params.accent,    kRec709LUTs, kRec709LUTCount);
-    al.accentI   = clamp01(params.accent.intensity);
+    al.tryAdd(params.logConvert, kLogLUTs,    kLogLUTCount);
+    al.tryAdd(params.creative,   kRec709LUTs, kRec709LUTCount);
+    al.tryAdd(params.secondary,  kRec709LUTs, kRec709LUTCount);
+    al.tryAdd(params.accent,     kRec709LUTs, kRec709LUTCount);
 
     if (!al.any()) { CopyFrame(src, dst); return; }
+
+    // ── Backend dispatch ──────────────────────────────────────────────
+    // Phase 3: When SelectBackend() returns kMetalGPU, build
+    // GPUDispatchDesc from al + src, encode Metal compute, and return.
+    // CPU path below is the permanent fallback.
+    // ──────────────────────────────────────────────────────────────────
 
     switch (src.format) {
         case FrameFormat::kRGBA_8u:

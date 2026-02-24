@@ -1,12 +1,5 @@
 #pragma once
 
-// Umbrella include for Adobe PF host wrapper. Guards against accidental Premiere headers.
-#ifdef __has_include
-#  if __has_include("PrSDKAESupport.h")
-#    warning "Premiere headers detected in AdobePF target; ensure search paths exclude Premiere SDK."
-#  endif
-#endif
-
 #include "AEConfig.h"
 #include "AE_Effect.h"
 #include "AE_EffectCB.h"

@@ -123,6 +123,20 @@ struct ActiveLayers {
     bool any() const { return count > 0; }
 };
 
+GPUDispatchDesc BuildGPUDesc(const ActiveLayers& al, const FrameDesc& src) {
+    GPUDispatchDesc desc{};
+    desc.layerCount  = al.count;
+    desc.frameWidth  = src.width;
+    desc.frameHeight = src.height;
+    for (int i = 0; i < al.count; ++i) {
+        desc.layers[i].lutData   = al.layers[i].data;
+        desc.layers[i].dimension = al.layers[i].dimension;
+        desc.layers[i].scale     = al.layers[i].scale;
+        desc.layers[i].intensity = al.layers[i].intensity;
+    }
+    return desc;
+}
+
 inline RGB processPixel(RGB color, const ActiveLayers& al) {
     for (int i = 0; i < al.count; ++i)
         color = applyLayer(al.layers[i], color);
@@ -153,7 +167,7 @@ void ProcessFrameCPU(const ParamsSnapshot& params, const FrameDesc& src, FrameDe
         CopyFrame(src, dst); return;
     }
 
-    // Resolve active layers once per frame (order: Log -> Creative -> Secondary -> Accent)
+    // Resolve active layers (order: Log -> Creative -> Secondary -> Accent)
     ActiveLayers al;
     al.tryAdd(params.logConvert, kLogLUTs,    kLogLUTCount);
     al.tryAdd(params.creative,   kRec709LUTs, kRec709LUTCount);
@@ -162,12 +176,16 @@ void ProcessFrameCPU(const ParamsSnapshot& params, const FrameDesc& src, FrameDe
 
     if (!al.any()) { CopyFrame(src, dst); return; }
 
-    // ── Backend dispatch ──────────────────────────────────────────────
-    // Phase 3: When SelectBackend() returns kMetalGPU, build
-    // GPUDispatchDesc from al + src, encode Metal compute, and return.
-    // CPU path below is the permanent fallback.
-    // ──────────────────────────────────────────────────────────────────
+    // Backend dispatch: when kEnableExperimentalMetal == false, the compiler
+    // eliminates this entire block via if-constexpr dead-code removal.
+    if (SelectBackend() == RenderBackend::kMetalGPU) {
+        GPUDispatchDesc desc = BuildGPUDesc(al, src);
+        if (metal::TryDispatch(desc, src.data, dst.data, src.rowBytes, dst.rowBytes))
+            return;
+        // TryDispatch returned false -- fall through to CPU
+    }
 
+    // CPU path (default and permanent fallback)
     switch (src.format) {
         case FrameFormat::kRGBA_8u:
             processTyped<Pixel8>(al, src, dst, toFloat8, fromFloat8); break;

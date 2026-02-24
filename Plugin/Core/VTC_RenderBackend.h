@@ -1,28 +1,32 @@
 #pragma once
+#include "VTC_MetalBootstrap.h"
 
 namespace vtc {
+
+// Master gate: set to true to enable Metal backend selection at runtime.
+// When false, SelectBackend() returns kCPU unconditionally and the compiler
+// eliminates all Metal code paths via if-constexpr dead-code removal.
+constexpr bool kEnableExperimentalMetal = false;
 
 enum class RenderBackend {
     kCPU,
     kMetalGPU
 };
 
-// Phase 3: Will query MTLCopyAllDevices() or similar at plugin load.
-// Returns false until Metal integration is implemented.
-constexpr bool IsMetalAvailable() { return false; }
+inline RenderBackend SelectBackend() {
+    if constexpr (kEnableExperimentalMetal) {
+        if (metal::IsAvailable()) return RenderBackend::kMetalGPU;
+    }
+    return RenderBackend::kCPU;
+}
 
-// Phase 3: Will check IsMetalAvailable() + internal state.
-// Returns kCPU unconditionally until GPU path is proven stable.
-constexpr RenderBackend SelectBackend() { return RenderBackend::kCPU; }
-
-// Compact descriptor for future Metal compute dispatch.
-// Built from CPU-side resolved layer data. No allocations, no Metal types.
-// Phase 3: lutData pointer becomes byte offset into unified MTLBuffer.
+// Compact descriptor for Metal compute dispatch.
+// Built from CPU-side resolved layer data.
 struct GPUDispatchDesc {
     static constexpr int kMaxLayers = 4;
 
     struct Layer {
-        const float* lutData;   // Phase 3: MTLBuffer offset
+        const float* lutData;   // Phase 4: MTLBuffer offset
         int   dimension;        // LUT grid size (e.g. 33)
         float scale;            // (float)(dimension - 1)
         float intensity;        // 0..1, pre-clamped

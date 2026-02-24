@@ -21,19 +21,69 @@ namespace metal {
 
 namespace {
 
-id<MTLDevice>               g_device      = nil;
-id<MTLCommandQueue>         g_queue       = nil;
-id<MTLComputePipelineState> g_lutPSO_8    = nil;
-id<MTLComputePipelineState> g_lutPSO_32f  = nil;
-bool                        g_available   = false;
-bool                        g_pipeline8OK = false;
+id<MTLDevice>               g_device       = nil;
+id<MTLCommandQueue>         g_queue        = nil;
+id<MTLComputePipelineState> g_lutPSO_8     = nil;
+id<MTLComputePipelineState> g_lutPSO_16    = nil;
+id<MTLComputePipelineState> g_lutPSO_32f   = nil;
+bool                        g_available    = false;
+bool                        g_pipeline8OK  = false;
+bool                        g_pipeline16OK = false;
 bool                        g_pipeline32OK = false;
 dispatch_once_t             g_ctxOnce;
 dispatch_once_t             g_psoOnce;
 
+// ── Resource cache ──────────────────────────────────────────────────
+// Reuses MTLBuffers across dispatches to avoid per-frame allocation
+// overhead. Thread safety: safe because TryDispatch blocks on
+// waitUntilCompleted before returning, so cached buffers are never
+// in-flight when the next dispatch accesses them.
+//
+// Invalidation conditions:
+//   srcBuf/dstBuf: reallocated when required byte size exceeds capacity
+//   lutBuf:        rebuilt when layer count, LUT data pointers, or
+//                  dimensions change (intensity is in GPUParams, not
+//                  baked into the LUT buffer)
+
+struct LUTCacheKey {
+    int          layerCount = 0;
+    const float* ptrs[GPUDispatchDesc::kMaxLayers] = {};
+    int          dims[GPUDispatchDesc::kMaxLayers] = {};
+
+    bool matches(const GPUDispatchDesc& desc) const {
+        if (layerCount != desc.layerCount) return false;
+        for (int i = 0; i < desc.layerCount; i++) {
+            if (ptrs[i] != desc.layers[i].lutData)   return false;
+            if (dims[i] != desc.layers[i].dimension)  return false;
+        }
+        return true;
+    }
+
+    void update(const GPUDispatchDesc& desc) {
+        layerCount = desc.layerCount;
+        for (int i = 0; i < GPUDispatchDesc::kMaxLayers; i++) {
+            if (i < desc.layerCount) {
+                ptrs[i] = desc.layers[i].lutData;
+                dims[i] = desc.layers[i].dimension;
+            } else {
+                ptrs[i] = nullptr;
+                dims[i] = 0;
+            }
+        }
+    }
+};
+
+id<MTLBuffer> g_cachedSrcBuf = nil;
+NSUInteger    g_cachedSrcCap = 0;
+id<MTLBuffer> g_cachedDstBuf = nil;
+NSUInteger    g_cachedDstCap = 0;
+id<MTLBuffer> g_cachedLutBuf = nil;
+LUTCacheKey   g_lutCacheKey;
+
 // ── GPU LUT kernels ──────────────────────────────────────────────────
-// Both kernels share the sampleLUT helper and struct definitions.
-// lut_apply_8bpc:  8bpc ARGB8 pixels (uchar4), 1..4 layers
+// All kernels share the sampleLUT helper and LUTParams struct.
+// lut_apply_8bpc:  8bpc  ARGB8 pixels (uchar4),  1..4 layers
+// lut_apply_16bpc: 16bpc ARGB16 pixels (ushort4), 1 layer only
 // lut_apply_32bpc: 32bpc ARGB float pixels (float4), 1 layer only
 NSString* const kLUTShaderSource = @R"MSL(
 #include <metal_stdlib>
@@ -49,7 +99,7 @@ struct LayerDesc {
 struct LUTParams {
     uint  width;
     uint  height;
-    uint  srcStride;   // row stride in pixel units (uchar4 for 8bpc, float4 for 32bpc)
+    uint  srcStride;   // row stride in pixel units
     uint  dstStride;
     uint  layerCount;  // 1..4
     uint  _pad0;
@@ -123,10 +173,37 @@ kernel void lut_apply_8bpc(
         pixel.x, uchar(q.x), uchar(q.y), uchar(q.z));
 }
 
+// ── 16bpc kernel (single layer) ──────────────────────────────────────
+// AE 16bpc pixel layout: ushort4(A, R, G, B), range [0, 32768]
+// CPU reference: toFloat16 divides by 32768.0,
+//   fromFloat16 writes clamp01(v) * 32768.0 + 0.5, clamped to max 32768.
+
+kernel void lut_apply_16bpc(
+    device const ushort4* src [[buffer(0)]],
+    device       ushort4* dst [[buffer(1)]],
+    device const float*   lut [[buffer(2)]],
+    constant LUTParams&   p   [[buffer(3)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= p.width || gid.y >= p.height) return;
+
+    ushort4 pixel = src[gid.y * p.srcStride + gid.x];
+    float3 color = float3(float(pixel.y), float(pixel.z), float(pixel.w)) / 32768.0f;
+
+    LayerDesc ld = p.layers[0];
+    int dim   = int(ld.dim);
+    int dimM1 = dim - 1;
+    float3 lutColor = sampleLUT(lut, ld.lutOffset, dim, dimM1, ld.scale, color);
+    color = mix(color, lutColor, ld.intensity);
+
+    float3 q = clamp(color, 0.0f, 1.0f) * 32768.0f + 0.5f;
+    q = min(q, 32768.0f);
+
+    dst[gid.y * p.dstStride + gid.x] = ushort4(
+        pixel.x, ushort(q.x), ushort(q.y), ushort(q.z));
+}
+
 // ── 32bpc kernel (single layer) ──────────────────────────────────────
-// AE 32bpc pixel layout: float4(A, R, G, B)
-// CPU reference: toFloat32 extracts (r, g, b) directly,
-//   fromFloat32 writes (a, clamp01(r), clamp01(g), clamp01(b)).
 
 kernel void lut_apply_32bpc(
     device const float4* src [[buffer(0)]],
@@ -138,7 +215,7 @@ kernel void lut_apply_32bpc(
     if (gid.x >= p.width || gid.y >= p.height) return;
 
     float4 pixel = src[gid.y * p.srcStride + gid.x];
-    float3 color = float3(pixel.y, pixel.z, pixel.w);  // R, G, B
+    float3 color = float3(pixel.y, pixel.z, pixel.w);
 
     LayerDesc ld = p.layers[0];
     int dim   = int(ld.dim);
@@ -147,7 +224,7 @@ kernel void lut_apply_32bpc(
     color = mix(color, lutColor, ld.intensity);
 
     dst[gid.y * p.dstStride + gid.x] = float4(
-        pixel.x,                    // preserve alpha
+        pixel.x,
         clamp(color.x, 0.0f, 1.0f),
         clamp(color.y, 0.0f, 1.0f),
         clamp(color.z, 0.0f, 1.0f));
@@ -199,11 +276,24 @@ void InitPipeline() {
                      (unsigned long)g_lutPSO_8.threadExecutionWidth,
                      (unsigned long)g_lutPSO_8.maxTotalThreadsPerThreadgroup);
             } else {
-                MLOG("8bpc pipeline creation failed: %s",
+                MLOG("8bpc pipeline failed: %s",
                      err ? [[err localizedDescription] UTF8String] : "unknown");
             }
-        } else {
-            MLOG("8bpc function lookup failed");
+        }
+
+        // 16bpc pipeline
+        id<MTLFunction> fn16 = [lib newFunctionWithName:@"lut_apply_16bpc"];
+        if (fn16) {
+            g_lutPSO_16 = [g_device newComputePipelineStateWithFunction:fn16 error:&err];
+            if (g_lutPSO_16) {
+                g_pipeline16OK = true;
+                MLOG("16bpc pipeline ready  tw=%lu  maxT=%lu",
+                     (unsigned long)g_lutPSO_16.threadExecutionWidth,
+                     (unsigned long)g_lutPSO_16.maxTotalThreadsPerThreadgroup);
+            } else {
+                MLOG("16bpc pipeline failed: %s",
+                     err ? [[err localizedDescription] UTF8String] : "unknown");
+            }
         }
 
         // 32bpc pipeline
@@ -216,40 +306,24 @@ void InitPipeline() {
                      (unsigned long)g_lutPSO_32f.threadExecutionWidth,
                      (unsigned long)g_lutPSO_32f.maxTotalThreadsPerThreadgroup);
             } else {
-                MLOG("32bpc pipeline creation failed: %s",
+                MLOG("32bpc pipeline failed: %s",
                      err ? [[err localizedDescription] UTF8String] : "unknown");
             }
-        } else {
-            MLOG("32bpc function lookup failed");
         }
     });
 }
 
-// ── Shared dispatch helper ───────────────────────────────────────────
+// ── Shared dispatch helper (uses pre-created buffers) ────────────────
 
 static bool dispatchKernel(id<MTLComputePipelineState> pso,
                            const GPUParams& params,
-                           const void* srcData, void* dstData,
-                           int srcRowBytes, int dstRowBytes,
+                           id<MTLBuffer> srcBuf,
+                           id<MTLBuffer> dstBuf,
+                           id<MTLBuffer> lutBuf,
                            int frameW, int frameH,
-                           const float* lutPacked, NSUInteger lutBytes)
+                           NSUInteger dstReadbackBytes,
+                           void* dstData)
 {
-    const NSUInteger srcSize = (NSUInteger)frameH * (NSUInteger)srcRowBytes;
-    const NSUInteger dstSize = (NSUInteger)frameH * (NSUInteger)dstRowBytes;
-
-    id<MTLBuffer> srcBuf = [g_device newBufferWithBytes:srcData
-                                                 length:srcSize
-                                                options:MTLResourceStorageModeShared];
-    id<MTLBuffer> dstBuf = [g_device newBufferWithLength:dstSize
-                                                 options:MTLResourceStorageModeShared];
-    id<MTLBuffer> lutBuf = [g_device newBufferWithBytes:lutPacked
-                                                 length:lutBytes
-                                                options:MTLResourceStorageModeShared];
-    if (!srcBuf || !dstBuf || !lutBuf) {
-        MLOG("dispatch fail: buffer alloc");
-        return false;
-    }
-
     id<MTLCommandBuffer> cmdBuf = [g_queue commandBuffer];
     if (!cmdBuf) { MLOG("dispatch fail: cmdBuf"); return false; }
 
@@ -279,7 +353,7 @@ static bool dispatchKernel(id<MTLComputePipelineState> pso,
         return false;
     }
 
-    std::memcpy(dstData, dstBuf.contents, dstSize);
+    std::memcpy(dstData, dstBuf.contents, dstReadbackBytes);
     return true;
 }
 
@@ -323,13 +397,18 @@ bool TryDispatch(const GPUDispatchDesc& desc,
 
     // ── Route by pixel format ──
     const bool is8bpc  = (desc.bytesPerPixel == 4);
+    const bool is16bpc = (desc.bytesPerPixel == 8);
     const bool is32bpc = (desc.bytesPerPixel == 16);
 
-    if (!is8bpc && !is32bpc) {
-        MLOG("dispatch skip: unsupported bpp=%d (16bpc stays on CPU)", desc.bytesPerPixel);
+    if (!is8bpc && !is16bpc && !is32bpc) {
+        MLOG("dispatch skip: unsupported bpp=%d", desc.bytesPerPixel);
         return false;
     }
 
+    if (is16bpc && desc.layerCount != 1) {
+        MLOG("dispatch skip: 16bpc multi-layer not yet supported (layers=%d)", desc.layerCount);
+        return false;
+    }
     if (is32bpc && desc.layerCount != 1) {
         MLOG("dispatch skip: 32bpc multi-layer not yet supported (layers=%d)", desc.layerCount);
         return false;
@@ -349,40 +428,97 @@ bool TryDispatch(const GPUDispatchDesc& desc,
     InitPipeline();
 
     id<MTLComputePipelineState> pso = nil;
+    int bpcLabel = 0;
     if (is8bpc) {
         if (!g_pipeline8OK) { MLOG("dispatch skip: 8bpc pipeline not ready"); return false; }
-        pso = g_lutPSO_8;
+        pso = g_lutPSO_8;  bpcLabel = 8;
+    } else if (is16bpc) {
+        if (!g_pipeline16OK) { MLOG("dispatch skip: 16bpc pipeline not ready"); return false; }
+        pso = g_lutPSO_16; bpcLabel = 16;
     } else {
         if (!g_pipeline32OK) { MLOG("dispatch skip: 32bpc pipeline not ready"); return false; }
-        pso = g_lutPSO_32f;
+        pso = g_lutPSO_32f; bpcLabel = 32;
     }
 
     const int w = desc.frameWidth;
     const int h = desc.frameHeight;
     if (w <= 0 || h <= 0) return false;
 
+    const NSUInteger srcSize  = (NSUInteger)h * (NSUInteger)srcRowBytes;
+    const NSUInteger dstSize  = (NSUInteger)h * (NSUInteger)dstRowBytes;
     const NSUInteger lutBytes = totalLutFloats * sizeof(float);
 
     @autoreleasepool {
-        // Pack LUT data
-        float* lutPacked = (float*)std::malloc(lutBytes);
-        if (!lutPacked) { MLOG("dispatch fail: lutPacked malloc"); return false; }
+        // ── Source buffer: reuse if capacity sufficient, else reallocate ──
+        if (!g_cachedSrcBuf || g_cachedSrcCap < srcSize) {
+            g_cachedSrcBuf = [g_device newBufferWithBytes:srcData
+                                                   length:srcSize
+                                                  options:MTLResourceStorageModeShared];
+            g_cachedSrcCap = g_cachedSrcBuf ? srcSize : 0;
+            MLOG("cache: srcBuf ALLOC %lu bytes", (unsigned long)srcSize);
+            if (!g_cachedSrcBuf) {
+                MLOG("dispatch fail: srcBuf alloc"); return false;
+            }
+        } else {
+            std::memcpy(g_cachedSrcBuf.contents, srcData, srcSize);
+            MLOG("cache: srcBuf REUSE (%lu <= %lu)",
+                 (unsigned long)srcSize, (unsigned long)g_cachedSrcCap);
+        }
 
+        // ── Destination buffer: reuse if capacity sufficient ──
+        if (!g_cachedDstBuf || g_cachedDstCap < dstSize) {
+            g_cachedDstBuf = [g_device newBufferWithLength:dstSize
+                                                   options:MTLResourceStorageModeShared];
+            g_cachedDstCap = g_cachedDstBuf ? dstSize : 0;
+            MLOG("cache: dstBuf ALLOC %lu bytes", (unsigned long)dstSize);
+            if (!g_cachedDstBuf) {
+                MLOG("dispatch fail: dstBuf alloc"); return false;
+            }
+        } else {
+            MLOG("cache: dstBuf REUSE (%lu <= %lu)",
+                 (unsigned long)dstSize, (unsigned long)g_cachedDstCap);
+        }
+
+        // ── LUT buffer: reuse if layer pointers + dimensions unchanged ──
+        if (g_cachedLutBuf && g_lutCacheKey.matches(desc)) {
+            MLOG("cache: lutBuf HIT (layers=%d)", desc.layerCount);
+        } else {
+            float* lutPacked = (float*)std::malloc(lutBytes);
+            if (!lutPacked) { MLOG("dispatch fail: lutPacked malloc"); return false; }
+
+            uint32_t floatOff = 0;
+            for (int i = 0; i < desc.layerCount; i++) {
+                const auto& L = desc.layers[i];
+                NSUInteger layerFloats = (NSUInteger)L.dimension * L.dimension * L.dimension * 3;
+                std::memcpy(lutPacked + floatOff, L.lutData, layerFloats * sizeof(float));
+                floatOff += (uint32_t)layerFloats;
+            }
+
+            g_cachedLutBuf = [g_device newBufferWithBytes:lutPacked
+                                                   length:lutBytes
+                                                  options:MTLResourceStorageModeShared];
+            std::free(lutPacked);
+
+            if (!g_cachedLutBuf) {
+                MLOG("dispatch fail: lutBuf alloc"); return false;
+            }
+            g_lutCacheKey.update(desc);
+            MLOG("cache: lutBuf MISS -> rebuilt (layers=%d, %lu bytes)",
+                 desc.layerCount, (unsigned long)lutBytes);
+        }
+
+        // ── Build params (per-dispatch, cheap struct copy) ──
         GPUParams params = {};
         params.width      = (uint32_t)w;
         params.height     = (uint32_t)h;
         params.layerCount = (uint32_t)desc.layerCount;
-
-        // Stride: pixels per row (rowBytes / bytesPerPixel)
-        params.srcStride = (uint32_t)(srcRowBytes / desc.bytesPerPixel);
-        params.dstStride = (uint32_t)(dstRowBytes / desc.bytesPerPixel);
+        params.srcStride  = (uint32_t)(srcRowBytes / desc.bytesPerPixel);
+        params.dstStride  = (uint32_t)(dstRowBytes / desc.bytesPerPixel);
 
         uint32_t floatOffset = 0;
         for (int i = 0; i < desc.layerCount; i++) {
             const auto& L = desc.layers[i];
             NSUInteger layerFloats = (NSUInteger)L.dimension * L.dimension * L.dimension * 3;
-            std::memcpy(lutPacked + floatOffset, L.lutData, layerFloats * sizeof(float));
-
             params.layers[i].lutOffset  = floatOffset;
             params.layers[i].dimension  = (uint32_t)L.dimension;
             params.layers[i].scale      = L.scale;
@@ -390,14 +526,11 @@ bool TryDispatch(const GPUDispatchDesc& desc,
             floatOffset += (uint32_t)layerFloats;
         }
 
-        bool ok = dispatchKernel(pso, params, srcData, dstData,
-                                 srcRowBytes, dstRowBytes, w, h,
-                                 lutPacked, lutBytes);
-        std::free(lutPacked);
-
+        bool ok = dispatchKernel(pso, params,
+                                 g_cachedSrcBuf, g_cachedDstBuf, g_cachedLutBuf,
+                                 w, h, dstSize, dstData);
         if (ok) {
-            MLOG("dispatch OK: %dx%d  %dbpc  layers=%d",
-                 w, h, is8bpc ? 8 : 32, desc.layerCount);
+            MLOG("dispatch OK: %dx%d  %dbpc  layers=%d", w, h, bpcLabel, desc.layerCount);
         }
         return ok;
     }

@@ -193,6 +193,8 @@
 					"__aepi",
 					"-Xlinker",
 					"${PROJECT_DIR}/PiPL_Embedded.rsrc",
+					"-framework",
+					CoreFoundation,
 				);
 				PRODUCT_NAME = "VTC_Looks_AdobePF_Clean";
 				SDKROOT = macosx;
@@ -237,6 +239,8 @@
 					"__aepi",
 					"-Xlinker",
 					"${PROJECT_DIR}/PiPL_Embedded.rsrc",
+					"-framework",
+					CoreFoundation,
 				);
 				PRODUCT_NAME = "VTC_Looks_AdobePF_Clean";
 				SDKROOT = macosx;
@@ -248,14 +252,12 @@
 		BF0001240000000100000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				OTHER_LDFLAGS = ("-framework", CoreFoundation, );
 			};
 			name = Debug;
 		};
 		BF0001250000000100000001 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				OTHER_LDFLAGS = ("-framework", CoreFoundation, );
 			};
 			name = Release;
 		};

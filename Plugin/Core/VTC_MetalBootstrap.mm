@@ -11,9 +11,24 @@
 
 #if VTC_METAL_LOG
 #include <cstdio>
+#include <mach/mach_time.h>
 #define MLOG(fmt, ...) std::fprintf(stderr, "[VTC Metal] " fmt "\n", ##__VA_ARGS__)
+
+static double g_tickToMs = 0.0;
+static void ensureTickScale() {
+    if (g_tickToMs == 0.0) {
+        mach_timebase_info_data_t info;
+        mach_timebase_info(&info);
+        g_tickToMs = (double)info.numer / (double)info.denom / 1e6;
+    }
+}
+#define MTIMER_BEGIN  uint64_t _mt0 = mach_absolute_time()
+#define MTIMER_ELAPSED_MS  ((double)(mach_absolute_time() - _mt0) * g_tickToMs)
 #else
 #define MLOG(fmt, ...)
+#define MTIMER_BEGIN       ((void)0)
+#define MTIMER_ELAPSED_MS  (0.0)
+static inline void ensureTickScale() {}
 #endif
 
 namespace vtc {
@@ -32,6 +47,15 @@ bool                        g_pipeline16OK = false;
 bool                        g_pipeline32OK = false;
 dispatch_once_t             g_ctxOnce;
 dispatch_once_t             g_psoOnce;
+// ── Debug: GPU path selection override ───────────────────────────────
+// Controls which GPU LUT path is attempted when Metal is enabled.
+// Auto (default): try texture3d first, fall back to buffer, then CPU.
+// ForceTexture:   skip buffer attempt, texture only (still falls back
+//                 to CPU on failure -- never crashes).
+// ForceBuffer:    skip texture attempt, buffer only.
+enum class GPUPathMode { kAuto, kForceTexture, kForceBuffer };
+GPUPathMode g_gpuPathMode = GPUPathMode::kAuto;
+
 
 // ── Resource cache ──────────────────────────────────────────────────
 // Reuses MTLBuffers across dispatches to avoid per-frame allocation
@@ -78,6 +102,7 @@ NSUInteger    g_cachedSrcCap = 0;
 id<MTLBuffer> g_cachedDstBuf = nil;
 NSUInteger    g_cachedDstCap = 0;
 id<MTLBuffer> g_cachedLutBuf = nil;
+NSUInteger    g_cachedLutCap = 0;
 LUTCacheKey   g_lutCacheKey;
 // ── Texture LUT path (optional, additive) ────────────────────────────
 // Uses Metal 3D textures with hardware trilinear interpolation for
@@ -742,25 +767,45 @@ bool TryDispatch(const GPUDispatchDesc& desc,
     const int h = desc.frameHeight;
     if (w <= 0 || h <= 0) return false;
 
+    // ── Validation guards (debug-only sanity checks) ──
+    if (srcRowBytes < w * desc.bytesPerPixel) {
+        MLOG("dispatch skip: srcRowBytes=%d too small for %dx%dbpp", srcRowBytes, w, desc.bytesPerPixel);
+        return false;
+    }
+    if (dstRowBytes < w * desc.bytesPerPixel) {
+        MLOG("dispatch skip: dstRowBytes=%d too small for %dx%dbpp", dstRowBytes, w, desc.bytesPerPixel);
+        return false;
+    }
+    if (srcRowBytes % desc.bytesPerPixel != 0 || dstRowBytes % desc.bytesPerPixel != 0) {
+        MLOG("dispatch skip: rowBytes not aligned to bpp (src=%d dst=%d bpp=%d)",
+             srcRowBytes, dstRowBytes, desc.bytesPerPixel);
+        return false;
+    }
+
     const NSUInteger srcSize  = (NSUInteger)h * (NSUInteger)srcRowBytes;
     const NSUInteger dstSize  = (NSUInteger)h * (NSUInteger)dstRowBytes;
     const NSUInteger lutBytes = totalLutFloats * sizeof(float);
 
     @autoreleasepool {
-        // ── Source buffer: reuse if capacity sufficient, else reallocate ──
-        if (!g_cachedSrcBuf || g_cachedSrcCap < srcSize) {
-            g_cachedSrcBuf = [g_device newBufferWithBytes:srcData
-                                                   length:srcSize
-                                                  options:MTLResourceStorageModeShared];
-            g_cachedSrcCap = g_cachedSrcBuf ? srcSize : 0;
-            MLOG("cache: srcBuf ALLOC %lu bytes", (unsigned long)srcSize);
-            if (!g_cachedSrcBuf) {
-                MLOG("dispatch fail: srcBuf alloc"); return false;
+        ensureTickScale();
+        {
+            MTIMER_BEGIN;
+            if (!g_cachedSrcBuf || g_cachedSrcCap < srcSize) {
+                g_cachedSrcBuf = [g_device newBufferWithLength:srcSize
+                                                       options:MTLResourceStorageModeShared];
+                g_cachedSrcCap = g_cachedSrcBuf ? srcSize : 0;
+                if (!g_cachedSrcBuf) {
+                    MLOG("dispatch fail: srcBuf alloc"); return false;
+                }
+                std::memcpy(g_cachedSrcBuf.contents, srcData, srcSize);
+                MLOG("cache: srcBuf ALLOC %lu bytes  %.3fms",
+                     (unsigned long)srcSize, MTIMER_ELAPSED_MS);
+            } else {
+                std::memcpy(g_cachedSrcBuf.contents, srcData, srcSize);
+                MLOG("cache: srcBuf REUSE (%lu <= %lu)  %.3fms",
+                     (unsigned long)srcSize, (unsigned long)g_cachedSrcCap,
+                     MTIMER_ELAPSED_MS);
             }
-        } else {
-            std::memcpy(g_cachedSrcBuf.contents, srcData, srcSize);
-            MLOG("cache: srcBuf REUSE (%lu <= %lu)",
-                 (unsigned long)srcSize, (unsigned long)g_cachedSrcCap);
         }
 
         // ── Destination buffer: reuse if capacity sufficient ──
@@ -781,90 +826,114 @@ bool TryDispatch(const GPUDispatchDesc& desc,
         if (g_cachedLutBuf && g_lutCacheKey.matches(desc)) {
             MLOG("cache: lutBuf HIT (layers=%d)", desc.layerCount);
         } else {
-            float* lutPacked = (float*)std::malloc(lutBytes);
-            if (!lutPacked) { MLOG("dispatch fail: lutPacked malloc"); return false; }
+            MTIMER_BEGIN;
+            bool needAlloc = (!g_cachedLutBuf || g_cachedLutCap < lutBytes);
+            if (needAlloc) {
+                g_cachedLutBuf = [g_device newBufferWithLength:lutBytes
+                                                       options:MTLResourceStorageModeShared];
+                g_cachedLutCap = g_cachedLutBuf ? lutBytes : 0;
+                if (!g_cachedLutBuf) {
+                    MLOG("dispatch fail: lutBuf alloc"); return false;
+                }
+            }
 
+            float* dst = (float*)g_cachedLutBuf.contents;
             uint32_t floatOff = 0;
             for (int i = 0; i < desc.layerCount; i++) {
                 const auto& L = desc.layers[i];
                 NSUInteger layerFloats = (NSUInteger)L.dimension * L.dimension * L.dimension * 3;
-                std::memcpy(lutPacked + floatOff, L.lutData, layerFloats * sizeof(float));
+                std::memcpy(dst + floatOff, L.lutData, layerFloats * sizeof(float));
                 floatOff += (uint32_t)layerFloats;
             }
 
-            g_cachedLutBuf = [g_device newBufferWithBytes:lutPacked
-                                                   length:lutBytes
-                                                  options:MTLResourceStorageModeShared];
-            std::free(lutPacked);
-
-            if (!g_cachedLutBuf) {
-                MLOG("dispatch fail: lutBuf alloc"); return false;
-            }
             g_lutCacheKey.update(desc);
-            MLOG("cache: lutBuf MISS -> rebuilt (layers=%d, %lu bytes)",
-                 desc.layerCount, (unsigned long)lutBytes);
+            MLOG("cache: lutBuf %s (layers=%d, %lu bytes)  %.3fms",
+                 needAlloc ? "ALLOC+FILL" : "REFILL",
+                 desc.layerCount, (unsigned long)lutBytes, MTIMER_ELAPSED_MS);
         }
 
-        // ── Try 3D texture path (falls back to buffer path on failure) ──
-        InitTexturePipeline();
-        if (g_texPipelineOK) {
-            id<MTLComputePipelineState> texPso = nil;
-            if (is8bpc)       texPso = g_texPSO_8;
-            else if (is16bpc) texPso = g_texPSO_16;
-            else              texPso = g_texPSO_32f;
+        const bool tryTexture = (g_gpuPathMode != GPUPathMode::kForceBuffer);
+        const bool tryBuffer  = (g_gpuPathMode != GPUPathMode::kForceTexture);
 
-            bool texturesReady = true;
-            if (!g_texCacheKey.matches(desc)) {
-                for (int i = 0; i < GPUDispatchDesc::kMaxLayers; i++)
-                    g_cachedLutTex[i] = nil;
-                for (int i = 0; i < desc.layerCount; i++) {
-                    g_cachedLutTex[i] = createLUTTexture(
-                        desc.layers[i].lutData, desc.layers[i].dimension);
-                    if (!g_cachedLutTex[i]) { texturesReady = false; break; }
+        MLOG("path mode: %s  tryTex=%d tryBuf=%d",
+             g_gpuPathMode == GPUPathMode::kAuto ? "Auto" :
+             g_gpuPathMode == GPUPathMode::kForceTexture ? "ForceTexture" : "ForceBuffer",
+             tryTexture, tryBuffer);
+
+        // ── Try 3D texture path ──
+        if (tryTexture) {
+            InitTexturePipeline();
+            if (g_texPipelineOK) {
+                id<MTLComputePipelineState> texPso = nil;
+                if (is8bpc)       texPso = g_texPSO_8;
+                else if (is16bpc) texPso = g_texPSO_16;
+                else              texPso = g_texPSO_32f;
+
+                bool texturesReady = true;
+                if (!g_texCacheKey.matches(desc)) {
+                    for (int i = 0; i < GPUDispatchDesc::kMaxLayers; i++)
+                        g_cachedLutTex[i] = nil;
+                    for (int i = 0; i < desc.layerCount; i++) {
+                        g_cachedLutTex[i] = createLUTTexture(
+                            desc.layers[i].lutData, desc.layers[i].dimension);
+                        if (!g_cachedLutTex[i]) { texturesReady = false; break; }
+                    }
+                    for (int i = desc.layerCount; i < GPUDispatchDesc::kMaxLayers; i++)
+                        g_cachedLutTex[i] = g_dummyTex;
+                    if (texturesReady) g_texCacheKey.update(desc);
+                    MLOG("tex cache: %s (layers=%d)",
+                         texturesReady ? "rebuilt" : "FAIL", desc.layerCount);
+                } else {
+                    MLOG("tex cache: HIT (layers=%d)", desc.layerCount);
                 }
-                for (int i = desc.layerCount; i < GPUDispatchDesc::kMaxLayers; i++)
-                    g_cachedLutTex[i] = g_dummyTex;
-                if (texturesReady) g_texCacheKey.update(desc);
-                MLOG("tex cache: %s (layers=%d)",
-                     texturesReady ? "rebuilt" : "FAIL", desc.layerCount);
+
+                if (texturesReady && texPso) {
+                    GPUTexParams texParams = {};
+                    texParams.width      = (uint32_t)w;
+                    texParams.height     = (uint32_t)h;
+                    texParams.srcStride  = (uint32_t)(srcRowBytes / desc.bytesPerPixel);
+                    texParams.dstStride  = (uint32_t)(dstRowBytes / desc.bytesPerPixel);
+                    texParams.layerCount = (uint32_t)desc.layerCount;
+                    for (int i = 0; i < desc.layerCount; i++) {
+                        float d = (float)desc.layers[i].dimension;
+                        texParams.layers[i].coordScale = (d - 1.0f) / d;
+                        texParams.layers[i].coordBias  = 0.5f / d;
+                        texParams.layers[i].intensity  = desc.layers[i].intensity;
+                    }
+
+                    id<MTLTexture> texArr[4] = {
+                        g_cachedLutTex[0] ? g_cachedLutTex[0] : g_dummyTex,
+                        g_cachedLutTex[1] ? g_cachedLutTex[1] : g_dummyTex,
+                        g_cachedLutTex[2] ? g_cachedLutTex[2] : g_dummyTex,
+                        g_cachedLutTex[3] ? g_cachedLutTex[3] : g_dummyTex
+                    };
+
+                    MTIMER_BEGIN;
+                    bool texOK = dispatchTextureKernel(texPso, texParams,
+                        g_cachedSrcBuf, g_cachedDstBuf, texArr,
+                        w, h, dstSize, dstData);
+                    if (texOK) {
+                        MLOG("RENDERED via TEXTURE: %dx%d %dbpc layers=%d  %.3fms",
+                             w, h, bpcLabel, desc.layerCount, MTIMER_ELAPSED_MS);
+                        return true;
+                    }
+                    MLOG("tex dispatch FAILED (%.3fms)", MTIMER_ELAPSED_MS);
+                } else {
+                    MLOG("tex path skipped: pipeline=%d texturesReady=%d",
+                         (texPso != nil), texturesReady);
+                }
             } else {
-                MLOG("tex cache: HIT (layers=%d)", desc.layerCount);
+                MLOG("tex pipeline not available");
             }
 
-            if (texturesReady && texPso) {
-                GPUTexParams texParams = {};
-                texParams.width      = (uint32_t)w;
-                texParams.height     = (uint32_t)h;
-                texParams.srcStride  = (uint32_t)(srcRowBytes / desc.bytesPerPixel);
-                texParams.dstStride  = (uint32_t)(dstRowBytes / desc.bytesPerPixel);
-                texParams.layerCount = (uint32_t)desc.layerCount;
-                for (int i = 0; i < desc.layerCount; i++) {
-                    float d = (float)desc.layers[i].dimension;
-                    texParams.layers[i].coordScale = (d - 1.0f) / d;
-                    texParams.layers[i].coordBias  = 0.5f / d;
-                    texParams.layers[i].intensity  = desc.layers[i].intensity;
-                }
-
-                id<MTLTexture> texArr[4] = {
-                    g_cachedLutTex[0] ? g_cachedLutTex[0] : g_dummyTex,
-                    g_cachedLutTex[1] ? g_cachedLutTex[1] : g_dummyTex,
-                    g_cachedLutTex[2] ? g_cachedLutTex[2] : g_dummyTex,
-                    g_cachedLutTex[3] ? g_cachedLutTex[3] : g_dummyTex
-                };
-
-                bool texOK = dispatchTextureKernel(texPso, texParams,
-                    g_cachedSrcBuf, g_cachedDstBuf, texArr,
-                    w, h, dstSize, dstData);
-                if (texOK) {
-                    MLOG("tex dispatch OK: %dx%d %dbpc layers=%d",
-                         w, h, bpcLabel, desc.layerCount);
-                    return true;
-                }
-                MLOG("tex dispatch FAILED -> buffer fallback");
+            if (!tryBuffer) {
+                MLOG("ForceTexture mode: texture failed, falling back to CPU");
+                return false;
             }
+            MLOG("texture path failed -> trying buffer path");
         }
 
-        // ── Build params (per-dispatch, cheap struct copy) ──
+        // ── Buffer-based GPU LUT path ──
         GPUParams params = {};
         params.width      = (uint32_t)w;
         params.height     = (uint32_t)h;
@@ -883,13 +952,20 @@ bool TryDispatch(const GPUDispatchDesc& desc,
             floatOffset += (uint32_t)layerFloats;
         }
 
-        bool ok = dispatchKernel(pso, params,
-                                 g_cachedSrcBuf, g_cachedDstBuf, g_cachedLutBuf,
-                                 w, h, dstSize, dstData);
-        if (ok) {
-            MLOG("dispatch OK: %dx%d  %dbpc  layers=%d", w, h, bpcLabel, desc.layerCount);
+        {
+            MTIMER_BEGIN;
+            bool ok = dispatchKernel(pso, params,
+                                     g_cachedSrcBuf, g_cachedDstBuf, g_cachedLutBuf,
+                                     w, h, dstSize, dstData);
+            if (ok) {
+                MLOG("RENDERED via BUFFER: %dx%d %dbpc layers=%d  %.3fms",
+                     w, h, bpcLabel, desc.layerCount, MTIMER_ELAPSED_MS);
+            } else {
+                MLOG("buffer dispatch FAILED -> CPU fallback  (%.3fms)",
+                     MTIMER_ELAPSED_MS);
+            }
+            return ok;
         }
-        return ok;
     }
 }
 

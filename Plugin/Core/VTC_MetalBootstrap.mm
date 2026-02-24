@@ -79,6 +79,20 @@ id<MTLBuffer> g_cachedDstBuf = nil;
 NSUInteger    g_cachedDstCap = 0;
 id<MTLBuffer> g_cachedLutBuf = nil;
 LUTCacheKey   g_lutCacheKey;
+// ── Texture LUT path (optional, additive) ────────────────────────────
+// Uses Metal 3D textures with hardware trilinear interpolation for
+// LUT sampling. Falls back to buffer path if texture creation fails.
+
+id<MTLComputePipelineState> g_texPSO_8   = nil;
+id<MTLComputePipelineState> g_texPSO_16  = nil;
+id<MTLComputePipelineState> g_texPSO_32f = nil;
+bool            g_texPipelineOK = false;
+dispatch_once_t g_texPsoOnce;
+
+id<MTLTexture>  g_cachedLutTex[GPUDispatchDesc::kMaxLayers] = {};
+LUTCacheKey     g_texCacheKey;
+id<MTLTexture>  g_dummyTex = nil;
+
 
 // ── GPU LUT kernels ──────────────────────────────────────────────────
 // All kernels share the sampleLUT helper and LUTParams struct.
@@ -235,6 +249,155 @@ kernel void lut_apply_32bpc(
 }
 )MSL";
 
+// ── Texture-based LUT kernels (optional optimization) ───────────────
+// Hardware trilinear interpolation via Metal 3D textures. Same pixel
+// I/O as buffer kernels; only the LUT lookup path changes.
+// Bindings: buffer(0)=src, buffer(1)=dst, buffer(2)=params
+//           texture(0..3) = per-layer 3D LUT textures (RGBA32Float)
+NSString* const kTexShaderSource = @R"MSL(
+#include <metal_stdlib>
+using namespace metal;
+
+struct TexLayerDesc {
+    float coordScale;   // (dim-1) / dim
+    float coordBias;    // 0.5 / dim
+    float intensity;
+    float _pad;
+};
+
+struct LUTTexParams {
+    uint width; uint height; uint srcStride; uint dstStride;
+    uint layerCount; uint _pad0; uint _pad1; uint _pad2;
+    TexLayerDesc layers[4];
+};
+
+constexpr sampler lutSampler(filter::linear, address::clamp_to_edge);
+
+kernel void lut_apply_tex_8bpc(
+    device const uchar4* src [[buffer(0)]],
+    device       uchar4* dst [[buffer(1)]],
+    constant LUTTexParams& p [[buffer(2)]],
+    texture3d<float> lut0 [[texture(0)]],
+    texture3d<float> lut1 [[texture(1)]],
+    texture3d<float> lut2 [[texture(2)]],
+    texture3d<float> lut3 [[texture(3)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= p.width || gid.y >= p.height) return;
+    uchar4 pixel = src[gid.y * p.srcStride + gid.x];
+    float3 color = float3(float(pixel.y), float(pixel.z), float(pixel.w)) / 255.0f;
+
+    if (p.layerCount > 0) {
+        TexLayerDesc ld = p.layers[0];
+        float3 tc = clamp(color, 0.0f, 1.0f) * ld.coordScale + ld.coordBias;
+        color = mix(color, lut0.sample(lutSampler, tc).xyz, ld.intensity);
+    }
+    if (p.layerCount > 1) {
+        TexLayerDesc ld = p.layers[1];
+        float3 tc = clamp(color, 0.0f, 1.0f) * ld.coordScale + ld.coordBias;
+        color = mix(color, lut1.sample(lutSampler, tc).xyz, ld.intensity);
+    }
+    if (p.layerCount > 2) {
+        TexLayerDesc ld = p.layers[2];
+        float3 tc = clamp(color, 0.0f, 1.0f) * ld.coordScale + ld.coordBias;
+        color = mix(color, lut2.sample(lutSampler, tc).xyz, ld.intensity);
+    }
+    if (p.layerCount > 3) {
+        TexLayerDesc ld = p.layers[3];
+        float3 tc = clamp(color, 0.0f, 1.0f) * ld.coordScale + ld.coordBias;
+        color = mix(color, lut3.sample(lutSampler, tc).xyz, ld.intensity);
+    }
+
+    float3 q = clamp(color, 0.0f, 1.0f) * 255.0f + 0.5f;
+    q = min(q, 255.0f);
+    dst[gid.y * p.dstStride + gid.x] = uchar4(
+        pixel.x, uchar(q.x), uchar(q.y), uchar(q.z));
+}
+
+kernel void lut_apply_tex_16bpc(
+    device const ushort4* src [[buffer(0)]],
+    device       ushort4* dst [[buffer(1)]],
+    constant LUTTexParams& p  [[buffer(2)]],
+    texture3d<float> lut0 [[texture(0)]],
+    texture3d<float> lut1 [[texture(1)]],
+    texture3d<float> lut2 [[texture(2)]],
+    texture3d<float> lut3 [[texture(3)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= p.width || gid.y >= p.height) return;
+    ushort4 pixel = src[gid.y * p.srcStride + gid.x];
+    float3 color = float3(float(pixel.y), float(pixel.z), float(pixel.w)) / 32768.0f;
+
+    if (p.layerCount > 0) {
+        TexLayerDesc ld = p.layers[0];
+        float3 tc = clamp(color, 0.0f, 1.0f) * ld.coordScale + ld.coordBias;
+        color = mix(color, lut0.sample(lutSampler, tc).xyz, ld.intensity);
+    }
+    if (p.layerCount > 1) {
+        TexLayerDesc ld = p.layers[1];
+        float3 tc = clamp(color, 0.0f, 1.0f) * ld.coordScale + ld.coordBias;
+        color = mix(color, lut1.sample(lutSampler, tc).xyz, ld.intensity);
+    }
+    if (p.layerCount > 2) {
+        TexLayerDesc ld = p.layers[2];
+        float3 tc = clamp(color, 0.0f, 1.0f) * ld.coordScale + ld.coordBias;
+        color = mix(color, lut2.sample(lutSampler, tc).xyz, ld.intensity);
+    }
+    if (p.layerCount > 3) {
+        TexLayerDesc ld = p.layers[3];
+        float3 tc = clamp(color, 0.0f, 1.0f) * ld.coordScale + ld.coordBias;
+        color = mix(color, lut3.sample(lutSampler, tc).xyz, ld.intensity);
+    }
+
+    float3 q = clamp(color, 0.0f, 1.0f) * 32768.0f + 0.5f;
+    q = min(q, 32768.0f);
+    dst[gid.y * p.dstStride + gid.x] = ushort4(
+        pixel.x, ushort(q.x), ushort(q.y), ushort(q.z));
+}
+
+kernel void lut_apply_tex_32bpc(
+    device const float4* src [[buffer(0)]],
+    device       float4* dst [[buffer(1)]],
+    constant LUTTexParams& p [[buffer(2)]],
+    texture3d<float> lut0 [[texture(0)]],
+    texture3d<float> lut1 [[texture(1)]],
+    texture3d<float> lut2 [[texture(2)]],
+    texture3d<float> lut3 [[texture(3)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= p.width || gid.y >= p.height) return;
+    float4 pixel = src[gid.y * p.srcStride + gid.x];
+    float3 color = float3(pixel.y, pixel.z, pixel.w);
+
+    if (p.layerCount > 0) {
+        TexLayerDesc ld = p.layers[0];
+        float3 tc = clamp(color, 0.0f, 1.0f) * ld.coordScale + ld.coordBias;
+        color = mix(color, lut0.sample(lutSampler, tc).xyz, ld.intensity);
+    }
+    if (p.layerCount > 1) {
+        TexLayerDesc ld = p.layers[1];
+        float3 tc = clamp(color, 0.0f, 1.0f) * ld.coordScale + ld.coordBias;
+        color = mix(color, lut1.sample(lutSampler, tc).xyz, ld.intensity);
+    }
+    if (p.layerCount > 2) {
+        TexLayerDesc ld = p.layers[2];
+        float3 tc = clamp(color, 0.0f, 1.0f) * ld.coordScale + ld.coordBias;
+        color = mix(color, lut2.sample(lutSampler, tc).xyz, ld.intensity);
+    }
+    if (p.layerCount > 3) {
+        TexLayerDesc ld = p.layers[3];
+        float3 tc = clamp(color, 0.0f, 1.0f) * ld.coordScale + ld.coordBias;
+        color = mix(color, lut3.sample(lutSampler, tc).xyz, ld.intensity);
+    }
+
+    dst[gid.y * p.dstStride + gid.x] = float4(
+        pixel.x,
+        clamp(color.x, 0.0f, 1.0f),
+        clamp(color.y, 0.0f, 1.0f),
+        clamp(color.z, 0.0f, 1.0f));
+}
+)MSL";
+
 // ── Host-side params struct (must match Metal layout exactly) ────────
 
 struct GPULayerInfo {
@@ -252,6 +415,23 @@ struct GPUParams {
     uint32_t layerCount;
     uint32_t _pad0, _pad1, _pad2;
     GPULayerInfo layers[4];
+};
+
+struct GPUTexLayerInfo {
+    float coordScale;   // (dim-1) / dim
+    float coordBias;    // 0.5 / dim
+    float intensity;
+    float _pad;
+};
+
+struct GPUTexParams {
+    uint32_t width;
+    uint32_t height;
+    uint32_t srcStride;
+    uint32_t dstStride;
+    uint32_t layerCount;
+    uint32_t _pad0, _pad1, _pad2;
+    GPUTexLayerInfo layers[4];
 };
 
 void InitPipeline() {
@@ -356,6 +536,129 @@ static bool dispatchKernel(id<MTLComputePipelineState> pso,
              cmdBuf.error ? [[cmdBuf.error localizedDescription] UTF8String] : "unknown");
         return false;
     }
+
+    std::memcpy(dstData, dstBuf.contents, dstReadbackBytes);
+    return true;
+}
+
+// ── 3D Texture LUT helpers ──────────────────────────────────────────
+
+static id<MTLTexture> createLUTTexture(const float* rgbData, int dim) {
+    MTLTextureDescriptor* desc = [MTLTextureDescriptor new];
+    desc.textureType = MTLTextureType3D;
+    desc.pixelFormat = MTLPixelFormatRGBA32Float;
+    desc.width  = (NSUInteger)dim;
+    desc.height = (NSUInteger)dim;
+    desc.depth  = (NSUInteger)dim;
+    desc.usage  = MTLTextureUsageShaderRead;
+    desc.storageMode = MTLStorageModeShared;
+
+    id<MTLTexture> tex = [g_device newTextureWithDescriptor:desc];
+    if (!tex) return nil;
+
+    size_t n = (size_t)dim * dim * dim;
+    float* rgba = (float*)std::malloc(n * 4 * sizeof(float));
+    if (!rgba) return nil;
+
+    for (size_t i = 0; i < n; i++) {
+        rgba[i*4 + 0] = rgbData[i*3 + 0];
+        rgba[i*4 + 1] = rgbData[i*3 + 1];
+        rgba[i*4 + 2] = rgbData[i*3 + 2];
+        rgba[i*4 + 3] = 0.0f;
+    }
+
+    [tex replaceRegion:MTLRegionMake3D(0, 0, 0, dim, dim, dim)
+           mipmapLevel:0
+                 slice:0
+             withBytes:rgba
+           bytesPerRow:(NSUInteger)dim * 4 * sizeof(float)
+         bytesPerImage:(NSUInteger)dim * dim * 4 * sizeof(float)];
+
+    std::free(rgba);
+    return tex;
+}
+
+static id<MTLTexture> createDummyTexture() {
+    MTLTextureDescriptor* desc = [MTLTextureDescriptor new];
+    desc.textureType = MTLTextureType3D;
+    desc.pixelFormat = MTLPixelFormatRGBA32Float;
+    desc.width = 1; desc.height = 1; desc.depth = 1;
+    desc.usage = MTLTextureUsageShaderRead;
+    desc.storageMode = MTLStorageModeShared;
+    id<MTLTexture> tex = [g_device newTextureWithDescriptor:desc];
+    if (tex) {
+        float rgba[4] = {0, 0, 0, 0};
+        [tex replaceRegion:MTLRegionMake3D(0,0,0,1,1,1) mipmapLevel:0 slice:0
+                 withBytes:rgba bytesPerRow:16 bytesPerImage:16];
+    }
+    return tex;
+}
+
+void InitTexturePipeline() {
+    dispatch_once(&g_texPsoOnce, ^{
+        if (!g_device) return;
+        NSError* err = nil;
+        id<MTLLibrary> lib = [g_device newLibraryWithSource:kTexShaderSource
+                                                    options:nil error:&err];
+        if (!lib) {
+            MLOG("tex shader compile FAILED: %s",
+                 err ? [[err localizedDescription] UTF8String] : "unknown");
+            return;
+        }
+
+        id<MTLFunction> fn8  = [lib newFunctionWithName:@"lut_apply_tex_8bpc"];
+        if (fn8)  g_texPSO_8  = [g_device newComputePipelineStateWithFunction:fn8  error:&err];
+
+        id<MTLFunction> fn16 = [lib newFunctionWithName:@"lut_apply_tex_16bpc"];
+        if (fn16) g_texPSO_16 = [g_device newComputePipelineStateWithFunction:fn16 error:&err];
+
+        id<MTLFunction> fn32 = [lib newFunctionWithName:@"lut_apply_tex_32bpc"];
+        if (fn32) g_texPSO_32f = [g_device newComputePipelineStateWithFunction:fn32 error:&err];
+
+        g_texPipelineOK = (g_texPSO_8 && g_texPSO_16 && g_texPSO_32f);
+
+        if (g_texPipelineOK) {
+            g_dummyTex = createDummyTexture();
+            if (!g_dummyTex) g_texPipelineOK = false;
+        }
+
+        MLOG("tex pipeline: %s", g_texPipelineOK ? "OK" : "FAILED");
+    });
+}
+
+static bool dispatchTextureKernel(id<MTLComputePipelineState> pso,
+                                   const GPUTexParams& params,
+                                   id<MTLBuffer> srcBuf,
+                                   id<MTLBuffer> dstBuf,
+                                   id<MTLTexture> textures[4],
+                                   int frameW, int frameH,
+                                   NSUInteger dstReadbackBytes,
+                                   void* dstData)
+{
+    id<MTLCommandBuffer> cmdBuf = [g_queue commandBuffer];
+    if (!cmdBuf) return false;
+
+    id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
+    if (!enc) return false;
+
+    [enc setComputePipelineState:pso];
+    [enc setBuffer:srcBuf offset:0 atIndex:0];
+    [enc setBuffer:dstBuf offset:0 atIndex:1];
+    [enc setBytes:&params length:sizeof(params) atIndex:2];
+
+    for (int i = 0; i < 4; i++)
+        [enc setTexture:textures[i] atIndex:i];
+
+    NSUInteger tw = pso.threadExecutionWidth;
+    NSUInteger th = pso.maxTotalThreadsPerThreadgroup / tw;
+    [enc dispatchThreads:MTLSizeMake((NSUInteger)frameW, (NSUInteger)frameH, 1)
+       threadsPerThreadgroup:MTLSizeMake(tw, th, 1)];
+    [enc endEncoding];
+
+    [cmdBuf commit];
+    [cmdBuf waitUntilCompleted];
+
+    if (cmdBuf.status == MTLCommandBufferStatusError) return false;
 
     std::memcpy(dstData, dstBuf.contents, dstReadbackBytes);
     return true;
@@ -500,6 +803,65 @@ bool TryDispatch(const GPUDispatchDesc& desc,
             g_lutCacheKey.update(desc);
             MLOG("cache: lutBuf MISS -> rebuilt (layers=%d, %lu bytes)",
                  desc.layerCount, (unsigned long)lutBytes);
+        }
+
+        // ── Try 3D texture path (falls back to buffer path on failure) ──
+        InitTexturePipeline();
+        if (g_texPipelineOK) {
+            id<MTLComputePipelineState> texPso = nil;
+            if (is8bpc)       texPso = g_texPSO_8;
+            else if (is16bpc) texPso = g_texPSO_16;
+            else              texPso = g_texPSO_32f;
+
+            bool texturesReady = true;
+            if (!g_texCacheKey.matches(desc)) {
+                for (int i = 0; i < GPUDispatchDesc::kMaxLayers; i++)
+                    g_cachedLutTex[i] = nil;
+                for (int i = 0; i < desc.layerCount; i++) {
+                    g_cachedLutTex[i] = createLUTTexture(
+                        desc.layers[i].lutData, desc.layers[i].dimension);
+                    if (!g_cachedLutTex[i]) { texturesReady = false; break; }
+                }
+                for (int i = desc.layerCount; i < GPUDispatchDesc::kMaxLayers; i++)
+                    g_cachedLutTex[i] = g_dummyTex;
+                if (texturesReady) g_texCacheKey.update(desc);
+                MLOG("tex cache: %s (layers=%d)",
+                     texturesReady ? "rebuilt" : "FAIL", desc.layerCount);
+            } else {
+                MLOG("tex cache: HIT (layers=%d)", desc.layerCount);
+            }
+
+            if (texturesReady && texPso) {
+                GPUTexParams texParams = {};
+                texParams.width      = (uint32_t)w;
+                texParams.height     = (uint32_t)h;
+                texParams.srcStride  = (uint32_t)(srcRowBytes / desc.bytesPerPixel);
+                texParams.dstStride  = (uint32_t)(dstRowBytes / desc.bytesPerPixel);
+                texParams.layerCount = (uint32_t)desc.layerCount;
+                for (int i = 0; i < desc.layerCount; i++) {
+                    float d = (float)desc.layers[i].dimension;
+                    texParams.layers[i].coordScale = (d - 1.0f) / d;
+                    texParams.layers[i].coordBias  = 0.5f / d;
+                    texParams.layers[i].intensity  = desc.layers[i].intensity;
+                }
+
+                id<MTLTexture> texArr[4] = {
+                    g_cachedLutTex[0] ? g_cachedLutTex[0] : g_dummyTex,
+                    g_cachedLutTex[1] ? g_cachedLutTex[1] : g_dummyTex,
+                    g_cachedLutTex[2] ? g_cachedLutTex[2] : g_dummyTex,
+                    g_cachedLutTex[3] ? g_cachedLutTex[3] : g_dummyTex
+                };
+
+                bool texOK = dispatchTextureKernel(texPso, texParams,
+                    g_cachedSrcBuf, g_cachedDstBuf, texArr,
+                    w, h, dstSize, dstData);
+                if (texOK) {
+                    MLOG("tex dispatch OK: %dx%d %dbpc layers=%d",
+                         w, h, bpcLabel, desc.layerCount);
+                    return true;
+                }
+                MLOG("tex dispatch FAILED -> buffer fallback");
+            }
         }
 
         // ── Build params (per-dispatch, cheap struct copy) ──

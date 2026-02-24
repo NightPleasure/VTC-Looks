@@ -16,8 +16,9 @@ bool IsAvailable();
 
 // GPU compute dispatch.
 // Supported: 8bpc 1..4 layers, 16bpc 1..4 layers, 32bpc 1..4 layers.
-// Returns true only if GPU successfully rendered the frame.
-// Returns false on any failure -- caller MUST fall back to CPU.
+// Tries 3D-texture path first (hardware trilinear); on failure falls
+// back to buffer-based LUT path. Returns false on any failure --
+// caller MUST fall back to CPU.
 bool TryDispatch(const GPUDispatchDesc& desc,
                  const void* srcData, void* dstData,
                  int srcRowBytes, int dstRowBytes);

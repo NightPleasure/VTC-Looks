@@ -128,6 +128,11 @@ GPUDispatchDesc BuildGPUDesc(const ActiveLayers& al, const FrameDesc& src) {
     desc.layerCount  = al.count;
     desc.frameWidth  = src.width;
     desc.frameHeight = src.height;
+    switch (src.format) {
+        case FrameFormat::kRGBA_8u:  desc.bytesPerPixel = 4;  break;
+        case FrameFormat::kRGBA_16u: desc.bytesPerPixel = 8;  break;
+        case FrameFormat::kRGBA_32f: desc.bytesPerPixel = 16; break;
+    }
     for (int i = 0; i < al.count; ++i) {
         desc.layers[i].lutData   = al.layers[i].data;
         desc.layers[i].dimension = al.layers[i].dimension;

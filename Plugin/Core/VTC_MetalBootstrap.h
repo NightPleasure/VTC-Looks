@@ -14,9 +14,10 @@ bool InitContext();
 // Triggers InitContext() on first call.
 bool IsAvailable();
 
-// GPU dispatch stub. Currently returns false (not implemented).
-// Phase 4: Will encode and execute Metal compute commands.
-// Caller MUST fall back to CPU if this returns false.
+// GPU compute dispatch. Phase 4: smoke passthrough (8bpc RGBA only).
+// Returns true only if GPU successfully rendered the frame.
+// Returns false on any failure -- caller MUST fall back to CPU.
+// Unsupported formats (16bpc, 32bpc) return false immediately.
 bool TryDispatch(const GPUDispatchDesc& desc,
                  const void* srcData, void* dstData,
                  int srcRowBytes, int dstRowBytes);

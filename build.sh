@@ -28,6 +28,7 @@ clang++ -arch arm64 -std=c++17 -O2 -bundle \
     "$VTC_CORE/VTC_MetalBootstrap.mm" \
     "$AE_SDK_ROOT/Examples/Util/Smart_Utils.cpp" \
     -framework CoreFoundation \
+    -framework Foundation \
     -weak_framework Metal \
     -o "$BUNDLE/Contents/MacOS/VTC_Looks_Pro"
 

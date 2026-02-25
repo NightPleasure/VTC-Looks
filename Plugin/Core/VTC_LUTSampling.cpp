@@ -164,30 +164,18 @@ GPUDispatchDesc BuildGPUDesc(const ActiveLayers& al, const FrameDesc& src) {
     return desc;
 }
 
-inline RGB processPixel(RGB color, const ActiveLayers& al) {
-    switch (al.count) {
-        case 1:
-            return applyLayer(al.layers[0], color);
-        case 2:
-            color = applyLayer(al.layers[0], color);
-            return applyLayer(al.layers[1], color);
-        case 3:
-            color = applyLayer(al.layers[0], color);
-            color = applyLayer(al.layers[1], color);
-            return applyLayer(al.layers[2], color);
-        case 4:
-            color = applyLayer(al.layers[0], color);
-            color = applyLayer(al.layers[1], color);
-            color = applyLayer(al.layers[2], color);
-            return applyLayer(al.layers[3], color);
-        default:
-            return color;
-    }
+template <int LayerCount>
+inline RGB processPixelN(RGB color, const ActiveLayers& al) {
+    if constexpr (LayerCount >= 1) color = applyLayer(al.layers[0], color);
+    if constexpr (LayerCount >= 2) color = applyLayer(al.layers[1], color);
+    if constexpr (LayerCount >= 3) color = applyLayer(al.layers[2], color);
+    if constexpr (LayerCount >= 4) color = applyLayer(al.layers[3], color);
+    return color;
 }
 
-template <typename PixelType, typename ToFloatFn, typename FromFloatFn>
-void processTyped(const ActiveLayers& al, const FrameDesc& src, FrameDesc& dst,
-                  ToFloatFn toFloat, FromFloatFn fromFloat) {
+template <int LayerCount, typename PixelType, typename ToFloatFn, typename FromFloatFn>
+void processTypedN(const ActiveLayers& al, const FrameDesc& src, FrameDesc& dst,
+                   ToFloatFn toFloat, FromFloatFn fromFloat) {
     const auto* srcBytes = static_cast<const std::uint8_t*>(src.data);
     auto* dstBytes = static_cast<std::uint8_t*>(dst.data);
     for (int y = 0; y < src.height; ++y) {
@@ -195,7 +183,7 @@ void processTyped(const ActiveLayers& al, const FrameDesc& src, FrameDesc& dst,
         auto* __restrict dstRow = reinterpret_cast<PixelType*>(dstBytes + y * dst.rowBytes);
         for (int x = 0; x < src.width; ++x) {
             const PixelType& s = srcRow[x];
-            RGB color = processPixel(toFloat(s), al);
+            RGB color = processPixelN<LayerCount>(toFloat(s), al);
             dstRow[x] = fromFloat(color, s.a);
         }
     }
@@ -229,11 +217,29 @@ void ProcessFrameCPU(const ParamsSnapshot& params, const FrameDesc& src, FrameDe
     // CPU path (default and permanent fallback)
     switch (src.format) {
         case FrameFormat::kRGBA_8u:
-            processTyped<Pixel8>(al, src, dst, toFloat8, fromFloat8); break;
+            switch (al.count) {
+                case 1: processTypedN<1, Pixel8>(al, src, dst, toFloat8, fromFloat8); break;
+                case 2: processTypedN<2, Pixel8>(al, src, dst, toFloat8, fromFloat8); break;
+                case 3: processTypedN<3, Pixel8>(al, src, dst, toFloat8, fromFloat8); break;
+                default: processTypedN<4, Pixel8>(al, src, dst, toFloat8, fromFloat8); break;
+            }
+            break;
         case FrameFormat::kRGBA_16u:
-            processTyped<Pixel16>(al, src, dst, toFloat16, fromFloat16); break;
+            switch (al.count) {
+                case 1: processTypedN<1, Pixel16>(al, src, dst, toFloat16, fromFloat16); break;
+                case 2: processTypedN<2, Pixel16>(al, src, dst, toFloat16, fromFloat16); break;
+                case 3: processTypedN<3, Pixel16>(al, src, dst, toFloat16, fromFloat16); break;
+                default: processTypedN<4, Pixel16>(al, src, dst, toFloat16, fromFloat16); break;
+            }
+            break;
         case FrameFormat::kRGBA_32f:
-            processTyped<Pixel32f>(al, src, dst, toFloat32, fromFloat32); break;
+            switch (al.count) {
+                case 1: processTypedN<1, Pixel32f>(al, src, dst, toFloat32, fromFloat32); break;
+                case 2: processTypedN<2, Pixel32f>(al, src, dst, toFloat32, fromFloat32); break;
+                case 3: processTypedN<3, Pixel32f>(al, src, dst, toFloat32, fromFloat32); break;
+                default: processTypedN<4, Pixel32f>(al, src, dst, toFloat32, fromFloat32); break;
+            }
+            break;
     }
 }
 

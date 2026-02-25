@@ -166,7 +166,8 @@ PF_Err EffectMain(PF_Cmd cmd, PF_InData* in_data, PF_OutData* out_data,
                                  | PF_OutFlag_SEND_UPDATE_PARAMS_UI;
             out_data->out_flags2 = PF_OutFlag2_FLOAT_COLOR_AWARE
                                  | PF_OutFlag2_SUPPORTS_SMART_RENDER
-                                 | PF_OutFlag2_PARAM_GROUP_START_COLLAPSED_FLAG;
+                                 | PF_OutFlag2_PARAM_GROUP_START_COLLAPSED_FLAG
+                                 | PF_OutFlag2_SUPPORTS_THREADED_RENDERING;
             break;
         case PF_Cmd_PARAMS_SETUP:
             err = AddParams(in_data, out_data);

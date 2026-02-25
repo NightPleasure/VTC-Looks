@@ -27,15 +27,13 @@ struct ResolvedLayer {
     float intensity;
 };
 
-inline RGB sampleLUT(const ResolvedLayer& layer, float r, float g, float b) {
-    const int    dim     = layer.dimension;
-    const int    dimM1   = dim - 1;
-    const float  scale   = layer.scale;
-    const float* lutData = layer.data;
+inline RGB sampleLUTFast(const ResolvedLayer& layer, float r, float g, float b) {
+    const int dim   = layer.dimension;
+    const int dimM1 = dim - 1;
 
-    const float x = clamp01(r) * scale;
-    const float y = clamp01(g) * scale;
-    const float z = clamp01(b) * scale;
+    const float x = clamp01(r) * layer.scale;
+    const float y = clamp01(g) * layer.scale;
+    const float z = clamp01(b) * layer.scale;
 
     const int x0 = static_cast<int>(x);
     const int y0 = static_cast<int>(y);
@@ -44,27 +42,51 @@ inline RGB sampleLUT(const ResolvedLayer& layer, float r, float g, float b) {
     const int y1 = std::min(y0 + 1, dimM1);
     const int z1 = std::min(z0 + 1, dimM1);
 
-    const float fx = x - x0, fy = y - y0, fz = z - z0;
+    const float fx = x - x0;
+    const float fy = y - y0;
+    const float fz = z - z0;
 
-    auto at = [dim, lutData](int xi, int yi, int zi) -> RGB {
-        const int idx = ((zi * dim + yi) * dim + xi) * 3;
-        return {lutData[idx], lutData[idx + 1], lutData[idx + 2]};
-    };
+    const int dim2 = dim * dim;
+    const float* lut = layer.data;
 
-    const RGB c000 = at(x0, y0, z0), c100 = at(x1, y0, z0);
-    const RGB c010 = at(x0, y1, z0), c110 = at(x1, y1, z0);
-    const RGB c001 = at(x0, y0, z1), c101 = at(x1, y0, z1);
-    const RGB c011 = at(x0, y1, z1), c111 = at(x1, y1, z1);
+    const int z0Base = z0 * dim2;
+    const int z1Base = z1 * dim2;
+    const int z0y0 = (z0Base + y0 * dim) * 3;
+    const int z0y1 = (z0Base + y1 * dim) * 3;
+    const int z1y0 = (z1Base + y0 * dim) * 3;
+    const int z1y1 = (z1Base + y1 * dim) * 3;
 
-    RGB c00{lerp(c000.r,c100.r,fx), lerp(c000.g,c100.g,fx), lerp(c000.b,c100.b,fx)};
-    RGB c10{lerp(c010.r,c110.r,fx), lerp(c010.g,c110.g,fx), lerp(c010.b,c110.b,fx)};
-    RGB c01{lerp(c001.r,c101.r,fx), lerp(c001.g,c101.g,fx), lerp(c001.b,c101.b,fx)};
-    RGB c11{lerp(c011.r,c111.r,fx), lerp(c011.g,c111.g,fx), lerp(c011.b,c111.b,fx)};
+    const int i000 = z0y0 + x0 * 3;
+    const int i100 = z0y0 + x1 * 3;
+    const int i010 = z0y1 + x0 * 3;
+    const int i110 = z0y1 + x1 * 3;
+    const int i001 = z1y0 + x0 * 3;
+    const int i101 = z1y0 + x1 * 3;
+    const int i011 = z1y1 + x0 * 3;
+    const int i111 = z1y1 + x1 * 3;
 
-    RGB c0{lerp(c00.r,c10.r,fy), lerp(c00.g,c10.g,fy), lerp(c00.b,c10.b,fy)};
-    RGB c1{lerp(c01.r,c11.r,fy), lerp(c01.g,c11.g,fy), lerp(c01.b,c11.b,fy)};
+    const RGB c000{lut[i000], lut[i000 + 1], lut[i000 + 2]};
+    const RGB c100{lut[i100], lut[i100 + 1], lut[i100 + 2]};
+    const RGB c010{lut[i010], lut[i010 + 1], lut[i010 + 2]};
+    const RGB c110{lut[i110], lut[i110 + 1], lut[i110 + 2]};
+    const RGB c001{lut[i001], lut[i001 + 1], lut[i001 + 2]};
+    const RGB c101{lut[i101], lut[i101 + 1], lut[i101 + 2]};
+    const RGB c011{lut[i011], lut[i011 + 1], lut[i011 + 2]};
+    const RGB c111{lut[i111], lut[i111 + 1], lut[i111 + 2]};
 
-    return {lerp(c0.r,c1.r,fz), lerp(c0.g,c1.g,fz), lerp(c0.b,c1.b,fz)};
+    const RGB c00{lerp(c000.r, c100.r, fx), lerp(c000.g, c100.g, fx), lerp(c000.b, c100.b, fx)};
+    const RGB c10{lerp(c010.r, c110.r, fx), lerp(c010.g, c110.g, fx), lerp(c010.b, c110.b, fx)};
+    const RGB c01{lerp(c001.r, c101.r, fx), lerp(c001.g, c101.g, fx), lerp(c001.b, c101.b, fx)};
+    const RGB c11{lerp(c011.r, c111.r, fx), lerp(c011.g, c111.g, fx), lerp(c011.b, c111.b, fx)};
+
+    const RGB c0{lerp(c00.r, c10.r, fy), lerp(c00.g, c10.g, fy), lerp(c00.b, c10.b, fy)};
+    const RGB c1{lerp(c01.r, c11.r, fy), lerp(c01.g, c11.g, fy), lerp(c01.b, c11.b, fy)};
+
+    return {lerp(c0.r, c1.r, fz), lerp(c0.g, c1.g, fz), lerp(c0.b, c1.b, fz)};
+}
+
+inline RGB sampleLUT(const ResolvedLayer& layer, float r, float g, float b) {
+    return sampleLUTFast(layer, r, g, b);
 }
 
 inline RGB applyLayer(const ResolvedLayer& layer, RGB color) {
@@ -143,23 +165,37 @@ GPUDispatchDesc BuildGPUDesc(const ActiveLayers& al, const FrameDesc& src) {
 }
 
 inline RGB processPixel(RGB color, const ActiveLayers& al) {
-    for (int i = 0; i < al.count; ++i)
-        color = applyLayer(al.layers[i], color);
-    return color;
+    switch (al.count) {
+        case 1:
+            return applyLayer(al.layers[0], color);
+        case 2:
+            color = applyLayer(al.layers[0], color);
+            return applyLayer(al.layers[1], color);
+        case 3:
+            color = applyLayer(al.layers[0], color);
+            color = applyLayer(al.layers[1], color);
+            return applyLayer(al.layers[2], color);
+        case 4:
+            color = applyLayer(al.layers[0], color);
+            color = applyLayer(al.layers[1], color);
+            color = applyLayer(al.layers[2], color);
+            return applyLayer(al.layers[3], color);
+        default:
+            return color;
+    }
 }
 
 template <typename PixelType, typename ToFloatFn, typename FromFloatFn>
 void processTyped(const ActiveLayers& al, const FrameDesc& src, FrameDesc& dst,
                   ToFloatFn toFloat, FromFloatFn fromFloat) {
-    auto* srcBytes = static_cast<const std::uint8_t*>(src.data);
+    const auto* srcBytes = static_cast<const std::uint8_t*>(src.data);
     auto* dstBytes = static_cast<std::uint8_t*>(dst.data);
     for (int y = 0; y < src.height; ++y) {
-        const auto* srcRow = reinterpret_cast<const PixelType*>(srcBytes + y * src.rowBytes);
-        auto*       dstRow = reinterpret_cast<PixelType*>(dstBytes + y * dst.rowBytes);
+        const auto* __restrict srcRow = reinterpret_cast<const PixelType*>(srcBytes + y * src.rowBytes);
+        auto* __restrict dstRow = reinterpret_cast<PixelType*>(dstBytes + y * dst.rowBytes);
         for (int x = 0; x < src.width; ++x) {
             const PixelType& s = srcRow[x];
-            RGB color = toFloat(s);
-            color = processPixel(color, al);
+            RGB color = processPixel(toFloat(s), al);
             dstRow[x] = fromFloat(color, s.a);
         }
     }

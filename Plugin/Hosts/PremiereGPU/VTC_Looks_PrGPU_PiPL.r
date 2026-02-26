@@ -10,7 +10,7 @@ resource 'PiPL' (16000) {
         CodeMacARM64 {"EffectMain"},
         AE_PiPL_Version { 2, 0 },
         AE_Effect_Spec_Version { 13, 29 },
-        AE_Effect_Version { 524288 },
+        AE_Effect_Version { 526336 },
         AE_Effect_Info_Flags { 0 },
         AE_Effect_Global_OutFlags { 100663296 },
         AE_Effect_Global_OutFlags_2 { 134222856 },

@@ -4,7 +4,7 @@
 A separate GPU-accelerated plugin for Premiere Pro using the PrGPU (GPU Extensions) API.
 - **M0**: GPU passthrough (32f + 16f)
 - **M1**: Params (Enable, Intensity) + gating
-- **M2**: Single-layer LUT (32f only) — kRec709LUTs[0], trilinear sample, intensity blend
+- **M2**: Single-layer LUT (32f + 16f) — kRec709LUTs[0], trilinear sample, intensity blend
 
 The existing AE/PF plugin (`VTC_Looks_AdobePF_Clean`) is completely untouched.
 

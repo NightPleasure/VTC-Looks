@@ -16,6 +16,7 @@ enum { kMaxDevices = 12 };
 static id<MTLComputePipelineState> sPSO_32f[kMaxDevices] = {};
 static id<MTLComputePipelineState> sPSO_16f[kMaxDevices] = {};
 static id<MTLComputePipelineState> sPSO_LUT_32f[kMaxDevices] = {};
+static id<MTLComputePipelineState> sPSO_LUT_16f[kMaxDevices] = {};
 static id<MTLBuffer> sLUTBuffer[kMaxDevices] = {};
 
 struct CopyParams {
@@ -117,6 +118,7 @@ public:
                 if (sPSO_32f[inIndex]) { [sPSO_32f[inIndex] release]; sPSO_32f[inIndex] = nil; }
                 if (sPSO_16f[inIndex]) { [sPSO_16f[inIndex] release]; sPSO_16f[inIndex] = nil; }
                 if (sPSO_LUT_32f[inIndex]) { [sPSO_LUT_32f[inIndex] release]; sPSO_LUT_32f[inIndex] = nil; }
+                if (sPSO_LUT_16f[inIndex]) { [sPSO_LUT_16f[inIndex] release]; sPSO_LUT_16f[inIndex] = nil; }
                 if (sLUTBuffer[inIndex]) { [sLUTBuffer[inIndex] release]; sLUTBuffer[inIndex] = nil; }
             }
         }
@@ -147,18 +149,20 @@ private:
             id<MTLFunction> fn32 = [lib newFunctionWithName:@"VTC_Passthrough_32f"];
             id<MTLFunction> fn16 = [lib newFunctionWithName:@"VTC_Passthrough_16f"];
             id<MTLFunction> fnLUT = [lib newFunctionWithName:@"VTC_LUTApply_32f"];
-            if (!fn32 || !fn16 || !fnLUT) {
+            id<MTLFunction> fnLUT16 = [lib newFunctionWithName:@"VTC_LUTApply_16f"];
+            if (!fn32 || !fn16 || !fnLUT || !fnLUT16) {
                 VTC_PRGPU_LOG("ERROR kernel function missing");
-                if (fn32) [fn32 release]; if (fn16) [fn16 release]; if (fnLUT) [fnLUT release]; [lib release];
+                if (fn32) [fn32 release]; if (fn16) [fn16 release]; if (fnLUT) [fnLUT release]; if (fnLUT16) [fnLUT16 release]; [lib release];
                 return suiteError_Fail;
             }
 
             sPSO_32f[mDeviceIndex] = [dev newComputePipelineStateWithFunction:fn32 error:&err];
             sPSO_16f[mDeviceIndex] = [dev newComputePipelineStateWithFunction:fn16 error:&err];
             sPSO_LUT_32f[mDeviceIndex] = [dev newComputePipelineStateWithFunction:fnLUT error:&err];
-            [fn32 release]; [fn16 release]; [fnLUT release]; [lib release];
+            sPSO_LUT_16f[mDeviceIndex] = [dev newComputePipelineStateWithFunction:fnLUT16 error:&err];
+            [fn32 release]; [fn16 release]; [fnLUT release]; [fnLUT16 release]; [lib release];
 
-            if (!sPSO_32f[mDeviceIndex] || !sPSO_16f[mDeviceIndex] || !sPSO_LUT_32f[mDeviceIndex]) {
+            if (!sPSO_32f[mDeviceIndex] || !sPSO_16f[mDeviceIndex] || !sPSO_LUT_32f[mDeviceIndex] || !sPSO_LUT_16f[mDeviceIndex]) {
                 VTC_PRGPU_LOG("ERROR PSO creation");
                 return suiteError_Fail;
             }
@@ -185,8 +189,9 @@ private:
             id<MTLBuffer> inBuf = (id<MTLBuffer>)inData;
             id<MTLBuffer> outBuf = (id<MTLBuffer>)outData;
 
-            bool useLUT = snap.enable && snap.intensity > 0.0f && !is16f && sPSO_LUT_32f[mDeviceIndex] && sLUTBuffer[mDeviceIndex];
-            if (useLUT) {
+            bool useLUT32 = snap.enable && snap.intensity > 0.0f && !is16f && sPSO_LUT_32f[mDeviceIndex] && sLUTBuffer[mDeviceIndex];
+            bool useLUT16 = snap.enable && snap.intensity > 0.0f && is16f && sPSO_LUT_16f[mDeviceIndex] && sLUTBuffer[mDeviceIndex];
+            if (useLUT32) {
                 struct { int pitch; int width; int height; float intensity; } lutParams = { pitch, width, height, snap.intensity };
                 id<MTLBuffer> lutParamBuf = [[dev newBufferWithBytes:&lutParams length:sizeof(lutParams) options:MTLResourceStorageModeShared] autorelease];
                 [enc setComputePipelineState:sPSO_LUT_32f[mDeviceIndex]];
@@ -195,6 +200,17 @@ private:
                 [enc setBuffer:sLUTBuffer[mDeviceIndex] offset:0 atIndex:2];
                 [enc setBuffer:lutParamBuf offset:0 atIndex:3];
                 MTLSize tpg = {[sPSO_LUT_32f[mDeviceIndex] threadExecutionWidth], 16, 1};
+                MTLSize ntg = {DivideRoundUp((size_t)width, tpg.width), DivideRoundUp((size_t)height, tpg.height), 1};
+                [enc dispatchThreadgroups:ntg threadsPerThreadgroup:tpg];
+            } else if (useLUT16) {
+                struct { int pitch; int width; int height; float intensity; } lutParams = { pitch, width, height, snap.intensity };
+                id<MTLBuffer> lutParamBuf = [[dev newBufferWithBytes:&lutParams length:sizeof(lutParams) options:MTLResourceStorageModeShared] autorelease];
+                [enc setComputePipelineState:sPSO_LUT_16f[mDeviceIndex]];
+                [enc setBuffer:inBuf offset:0 atIndex:0];
+                [enc setBuffer:outBuf offset:0 atIndex:1];
+                [enc setBuffer:sLUTBuffer[mDeviceIndex] offset:0 atIndex:2];
+                [enc setBuffer:lutParamBuf offset:0 atIndex:3];
+                MTLSize tpg = {[sPSO_LUT_16f[mDeviceIndex] threadExecutionWidth], 16, 1};
                 MTLSize ntg = {DivideRoundUp((size_t)width, tpg.width), DivideRoundUp((size_t)height, tpg.height), 1};
                 [enc dispatchThreadgroups:ntg threadsPerThreadgroup:tpg];
             } else {

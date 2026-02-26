@@ -81,3 +81,20 @@ kernel void VTC_LUTApply_32f(
     float3 outRGB = mix(float3(r,g,b), lutRGB, params.intensity);
     outBuf[idx] = float4(outRGB.z, outRGB.y, outRGB.x, inColor.w);
 }
+
+// M2b: LUT apply (16f). Input/output half4 BGRA. Same logic as 32f with half<->float conversion.
+kernel void VTC_LUTApply_16f(
+    device const half4*  inBuf  [[buffer(0)]],
+    device       half4*  outBuf [[buffer(1)]],
+    device const float*  lutBuf [[buffer(2)]],
+    constant LUTParams&  params [[buffer(3)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= uint(params.width) || gid.y >= uint(params.height)) return;
+    uint idx = gid.y * uint(params.pitch) + gid.x;
+    half4 inColor = inBuf[idx];
+    float r = float(inColor.z), g = float(inColor.y), b = float(inColor.x);
+    float3 lutRGB = sampleLUT3D(lutBuf, 33, r, g, b);
+    float3 outRGB = mix(float3(r,g,b), lutRGB, params.intensity);
+    outBuf[idx] = half4(half(outRGB.z), half(outRGB.y), half(outRGB.x), inColor.w);
+}

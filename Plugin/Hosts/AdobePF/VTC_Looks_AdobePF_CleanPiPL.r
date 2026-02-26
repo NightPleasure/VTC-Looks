@@ -6,7 +6,7 @@ resource 'PiPL' (16000) {
     {
         Kind { AEEffect },
         Name { "VTC Looks" },
-        Category { "VTC" },
+        Category { "VTC Works" },
         CodeMacIntel64 {"EffectMain"},
         CodeMacARM64 {"EffectMain"},
         AE_PiPL_Version { 2, 0 },

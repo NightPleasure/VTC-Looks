@@ -98,3 +98,84 @@ kernel void VTC_LUTApply_16f(
     float3 outRGB = mix(float3(r,g,b), lutRGB, params.intensity);
     outBuf[idx] = half4(half(outRGB.z), half(outRGB.y), half(outRGB.x), inColor.w);
 }
+// M3: 4-layer cascade. LUT buffer has layers concatenated (each 33^3*3 floats).
+// Params: pitch, width, height, layerCount, then per-layer: offset (in floats), dimension, intensity (pad).
+struct MultiLUTParams {
+    int pitch;
+    int width;
+    int height;
+    int layerCount;
+    int layer0Offset;
+    int layer0Dim;
+    float layer0Intensity;
+    int layer1Offset;
+    int layer1Dim;
+    float layer1Intensity;
+    int layer2Offset;
+    int layer2Dim;
+    float layer2Intensity;
+    int layer3Offset;
+    int layer3Dim;
+    float layer3Intensity;
+};
+
+kernel void VTC_LUTApplyMulti_32f(
+    device const float4* inBuf   [[buffer(0)]],
+    device       float4* outBuf  [[buffer(1)]],
+    device const float*  lutBuf  [[buffer(2)]],
+    constant MultiLUTParams& p   [[buffer(3)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= uint(p.width) || gid.y >= uint(p.height)) return;
+    uint idx = gid.y * uint(p.pitch) + gid.x;
+    float4 c = inBuf[idx];
+    float r = c.z, g = c.y, b = c.x;
+    if (p.layerCount >= 1 && p.layer0Dim > 0) {
+        float3 lutRGB = sampleLUT3D(lutBuf + p.layer0Offset, p.layer0Dim, r, g, b);
+        r = mix(r, lutRGB.x, p.layer0Intensity); g = mix(g, lutRGB.y, p.layer0Intensity); b = mix(b, lutRGB.z, p.layer0Intensity);
+    }
+    if (p.layerCount >= 2 && p.layer1Dim > 0) {
+        float3 lutRGB = sampleLUT3D(lutBuf + p.layer1Offset, p.layer1Dim, r, g, b);
+        r = mix(r, lutRGB.x, p.layer1Intensity); g = mix(g, lutRGB.y, p.layer1Intensity); b = mix(b, lutRGB.z, p.layer1Intensity);
+    }
+    if (p.layerCount >= 3 && p.layer2Dim > 0) {
+        float3 lutRGB = sampleLUT3D(lutBuf + p.layer2Offset, p.layer2Dim, r, g, b);
+        r = mix(r, lutRGB.x, p.layer2Intensity); g = mix(g, lutRGB.y, p.layer2Intensity); b = mix(b, lutRGB.z, p.layer2Intensity);
+    }
+    if (p.layerCount >= 4 && p.layer3Dim > 0) {
+        float3 lutRGB = sampleLUT3D(lutBuf + p.layer3Offset, p.layer3Dim, r, g, b);
+        r = mix(r, lutRGB.x, p.layer3Intensity); g = mix(g, lutRGB.y, p.layer3Intensity); b = mix(b, lutRGB.z, p.layer3Intensity);
+    }
+    outBuf[idx] = float4(b, g, r, c.w);
+}
+
+kernel void VTC_LUTApplyMulti_16f(
+    device const half4*  inBuf   [[buffer(0)]],
+    device       half4*  outBuf  [[buffer(1)]],
+    device const float*  lutBuf  [[buffer(2)]],
+    constant MultiLUTParams& p   [[buffer(3)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= uint(p.width) || gid.y >= uint(p.height)) return;
+    uint idx = gid.y * uint(p.pitch) + gid.x;
+    half4 inC = inBuf[idx];
+    float r = float(inC.z), g = float(inC.y), b = float(inC.x);
+    if (p.layerCount >= 1 && p.layer0Dim > 0) {
+        float3 lutRGB = sampleLUT3D(lutBuf + p.layer0Offset, p.layer0Dim, r, g, b);
+        r = mix(r, lutRGB.x, p.layer0Intensity); g = mix(g, lutRGB.y, p.layer0Intensity); b = mix(b, lutRGB.z, p.layer0Intensity);
+    }
+    if (p.layerCount >= 2 && p.layer1Dim > 0) {
+        float3 lutRGB = sampleLUT3D(lutBuf + p.layer1Offset, p.layer1Dim, r, g, b);
+        r = mix(r, lutRGB.x, p.layer1Intensity); g = mix(g, lutRGB.y, p.layer1Intensity); b = mix(b, lutRGB.z, p.layer1Intensity);
+    }
+    if (p.layerCount >= 3 && p.layer2Dim > 0) {
+        float3 lutRGB = sampleLUT3D(lutBuf + p.layer2Offset, p.layer2Dim, r, g, b);
+        r = mix(r, lutRGB.x, p.layer2Intensity); g = mix(g, lutRGB.y, p.layer2Intensity); b = mix(b, lutRGB.z, p.layer2Intensity);
+    }
+    if (p.layerCount >= 4 && p.layer3Dim > 0) {
+        float3 lutRGB = sampleLUT3D(lutBuf + p.layer3Offset, p.layer3Dim, r, g, b);
+        r = mix(r, lutRGB.x, p.layer3Intensity); g = mix(g, lutRGB.y, p.layer3Intensity); b = mix(b, lutRGB.z, p.layer3Intensity);
+    }
+    outBuf[idx] = half4(half(b), half(g), half(r), inC.w);
+}
+

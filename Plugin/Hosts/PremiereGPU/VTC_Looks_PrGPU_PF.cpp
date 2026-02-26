@@ -12,6 +12,7 @@
 #include "../../Shared/VTC_LUTData.h"
 
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 
@@ -47,6 +48,40 @@ static bool EnvEnabled(const char* name) {
 static bool DiagEnabled() {
     static const bool enabled = EnvEnabled("VTC_PRGPU_DIAG");
     return enabled;
+}
+
+static bool ForceCPUTestModeEnabled() {
+    static const bool enabled = EnvEnabled("VTC_FORCE_CPU_TEST");
+    return enabled;
+}
+
+static void ApplyCpuTestMarker(const vtc::FrameDesc& dst) {
+    if (!dst.data || dst.width <= 0 || dst.height <= 0) return;
+    const int markW = (dst.width < 2) ? dst.width : 2;
+    const int markH = (dst.height < 2) ? dst.height : 2;
+
+    if (dst.format == vtc::FrameFormat::kRGBA_8u) {
+        struct Pixel8 { std::uint8_t a, r, g, b; };
+        auto* base = static_cast<std::uint8_t*>(dst.data);
+        for (int y = 0; y < markH; ++y) {
+            auto* row = reinterpret_cast<Pixel8*>(base + y * dst.rowBytes);
+            for (int x = 0; x < markW; ++x) row[x] = Pixel8{255, 255, 32, 255};
+        }
+    } else if (dst.format == vtc::FrameFormat::kRGBA_16u) {
+        struct Pixel16 { std::uint16_t a, r, g, b; };
+        auto* base = static_cast<std::uint8_t*>(dst.data);
+        for (int y = 0; y < markH; ++y) {
+            auto* row = reinterpret_cast<Pixel16*>(base + y * dst.rowBytes);
+            for (int x = 0; x < markW; ++x) row[x] = Pixel16{32768, 32768, 1024, 32768};
+        }
+    } else {
+        struct Pixel32f { float a, r, g, b; };
+        auto* base = static_cast<std::uint8_t*>(dst.data);
+        for (int y = 0; y < markH; ++y) {
+            auto* row = reinterpret_cast<Pixel32f*>(base + y * dst.rowBytes);
+            for (int x = 0; x < markW; ++x) row[x] = Pixel32f{1.0f, 1.0f, 0.05f, 1.0f};
+        }
+    }
 }
 
 static void DiagLogPathOnce(const char* reason) {
@@ -184,6 +219,10 @@ static void ProcessOrCopy(const PF_EffectWorld* srcWorld,
     }
 
     vtc::ProcessFrameCPU(snap, src, dst);
+
+    if (ForceCPUTestModeEnabled() && DiagEnabled()) {
+        ApplyCpuTestMarker(dst);
+    }
 }
 
 static PF_Err AddGroup(PF_InData* in_data,
@@ -313,9 +352,12 @@ static PF_Err Render(PF_InData* in_data, PF_OutData* out_data,
     if (srcWorld->width != dstWorld->width || srcWorld->height != dstWorld->height) return PF_Err_INVALID_CALLBACK;
 
     const vtc::ParamsSnapshot snap = ReadParamsFromRender(const_cast<const PF_ParamDef* const*>(params));
-    const char* reason = EnvEnabled("VTC_FALLBACK_FORCE_CPU")
-        ? "forced by VTC_FALLBACK_FORCE_CPU=1"
-        : "no Metal / PF CPU fallback path";
+    const bool cpuTestMode = ForceCPUTestModeEnabled();
+    const char* reason = cpuTestMode
+        ? "CPU TEST MODE (forced): VTC_FORCE_CPU_TEST=1"
+        : (EnvEnabled("VTC_FALLBACK_FORCE_CPU")
+            ? "forced by VTC_FALLBACK_FORCE_CPU=1"
+            : "no Metal / PF CPU fallback path");
     ProcessOrCopy(srcWorld, dstWorld, snap, reason);
     return PF_Err_NONE;
 }
@@ -356,9 +398,12 @@ static PF_Err SmartRender(PF_InData* in_data, PF_SmartRenderExtra* extra) {
             err = PF_Err_INVALID_CALLBACK;
         } else {
             const vtc::ParamsSnapshot snap = ReadParamsFromSmartRender(in_data);
-            const char* reason = EnvEnabled("VTC_FALLBACK_FORCE_CPU")
-                ? "forced by VTC_FALLBACK_FORCE_CPU=1"
-                : "no Metal / PF CPU fallback path";
+            const bool cpuTestMode = ForceCPUTestModeEnabled();
+            const char* reason = cpuTestMode
+                ? "CPU TEST MODE (forced): VTC_FORCE_CPU_TEST=1"
+                : (EnvEnabled("VTC_FALLBACK_FORCE_CPU")
+                    ? "forced by VTC_FALLBACK_FORCE_CPU=1"
+                    : "no Metal / PF CPU fallback path");
             ProcessOrCopy(input_world, output_world, snap, reason);
         }
     }
@@ -376,7 +421,7 @@ extern "C" DllExport PF_Err EffectMain(PF_Cmd cmd, PF_InData* in_data, PF_OutDat
     PF_Err err = PF_Err_NONE;
     switch (cmd) {
         case PF_Cmd_GLOBAL_SETUP:
-            out_data->my_version = PF_VERSION(1, 0, 2, 0, 0);
+            out_data->my_version = PF_VERSION(1, 0, 0, 0, 0);
             out_data->out_flags = PF_OutFlag_DEEP_COLOR_AWARE
                                | PF_OutFlag_SEND_UPDATE_PARAMS_UI;
             out_data->out_flags2 = PF_OutFlag2_FLOAT_COLOR_AWARE

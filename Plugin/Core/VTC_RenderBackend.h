@@ -6,7 +6,7 @@ namespace vtc {
 // Master gate: set to true to enable Metal backend selection at runtime.
 // When false, SelectBackend() returns kCPU unconditionally and the compiler
 // eliminates all Metal code paths via if-constexpr dead-code removal.
-constexpr bool kEnableExperimentalMetal = false;
+constexpr bool kEnableExperimentalMetal = true;
 
 enum class RenderBackend {
     kCPU,

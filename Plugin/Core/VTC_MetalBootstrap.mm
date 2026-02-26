@@ -2,6 +2,8 @@
 #import <Foundation/Foundation.h>
 #include "VTC_RenderBackend.h"
 #include <dispatch/dispatch.h>
+#include <unordered_map>
+#include <mutex>
 #include <cstring>
 #include <cstdlib>
 
@@ -47,6 +49,12 @@ bool                        g_pipeline16OK = false;
 bool                        g_pipeline32OK = false;
 dispatch_once_t             g_ctxOnce;
 dispatch_once_t             g_psoOnce;
+// I/O buffer cache (shared, thread-safe). ARC is off; cache holds one retain.
+static std::mutex   g_ioBufMutex;
+static id<MTLBuffer> g_cachedSrcBuf = nil;
+static NSUInteger    g_cachedSrcCap = 0;
+static id<MTLBuffer> g_cachedDstBuf = nil;
+static NSUInteger    g_cachedDstCap = 0;
 // ── Debug: GPU path selection override ───────────────────────────────
 // Controls which GPU LUT path is attempted when Metal is enabled.
 // Auto (default): try texture3d first, fall back to buffer, then CPU.
@@ -534,6 +542,7 @@ static id<MTLTexture> createLUTTexture(const float* rgbData, int dim) {
     desc.storageMode = MTLStorageModeShared;
 
     id<MTLTexture> tex = [g_device newTextureWithDescriptor:desc];
+    [desc release];
     if (!tex) return nil;
 
     size_t n = (size_t)dim * dim * dim;
@@ -566,6 +575,7 @@ static id<MTLTexture> createDummyTexture() {
     desc.usage = MTLTextureUsageShaderRead;
     desc.storageMode = MTLStorageModeShared;
     id<MTLTexture> tex = [g_device newTextureWithDescriptor:desc];
+    [desc release];
     if (tex) {
         float rgba[4] = {0, 0, 0, 0};
         [tex replaceRegion:MTLRegionMake3D(0,0,0,1,1,1) mipmapLevel:0 slice:0
@@ -741,126 +751,291 @@ bool TryDispatch(const GPUDispatchDesc& desc,
     const NSUInteger dstSize  = (NSUInteger)h * (NSUInteger)dstRowBytes;
     const NSUInteger lutBytes = totalLutFloats * sizeof(float);
 
+    // ── LUT cache (process lifetime; thread-safe with mutex) ──
+    enum class LUTPathMode : uint8_t { kBuffer = 0, kTexture = 1 };
+    struct LUTCacheKey {
+        const float* ptr;
+        uint16_t     dim;
+        uint8_t      path;
+        uint8_t      pixelFmt; // only used for texture
+        bool operator==(const LUTCacheKey& o) const {
+            return ptr == o.ptr && dim == o.dim && path == o.path && pixelFmt == o.pixelFmt;
+        }
+    };
+    struct LUTKeyHash {
+        std::size_t operator()(const LUTCacheKey& k) const noexcept {
+            return (std::hash<const float*>()(k.ptr) ^ (std::hash<uint16_t>()(k.dim) << 1)) ^
+                   (std::hash<uint8_t>()(k.path) << 2) ^ (std::hash<uint8_t>()(k.pixelFmt) << 3);
+        }
+    };
+
+    static std::unordered_map<LUTCacheKey, id<MTLTexture>, LUTKeyHash> g_texLUTCache;
+    static std::unordered_map<LUTCacheKey, id<MTLBuffer>,  LUTKeyHash> g_bufLUTCache;
+    static std::mutex g_lutCacheMutex;
+
+    auto getOrCreateLUTTexture = [&](const GPUDispatchDesc::Layer& L) -> id<MTLTexture> {
+        LUTCacheKey key{L.lutData, (uint16_t)L.dimension, (uint8_t)LUTPathMode::kTexture,
+                        (uint8_t)MTLPixelFormatRGBA32Float};
+        {
+            std::lock_guard<std::mutex> lock(g_lutCacheMutex);
+            auto it = g_texLUTCache.find(key);
+            if (it != g_texLUTCache.end()) {
+                return [it->second retain]; // caller releases; cache keeps its own retain
+            }
+        }
+
+        id<MTLTexture> tex = nil;
+        MTLTextureDescriptor* desc = [MTLTextureDescriptor new];
+        desc.textureType = MTLTextureType3D;
+        desc.pixelFormat = MTLPixelFormatRGBA32Float;
+        desc.width  = (NSUInteger)L.dimension;
+        desc.height = (NSUInteger)L.dimension;
+        desc.depth  = (NSUInteger)L.dimension;
+        desc.usage  = MTLTextureUsageShaderRead;
+        desc.storageMode = MTLStorageModeShared;
+
+        tex = [g_device newTextureWithDescriptor:desc];
+        [desc release];
+        if (!tex) return nil;
+
+        const NSUInteger n = (NSUInteger)L.dimension * L.dimension * L.dimension;
+        float* rgba = (float*)std::malloc(n * 4 * sizeof(float));
+        if (!rgba) { [tex release]; return nil; }
+        for (NSUInteger i = 0; i < n; i++) {
+            rgba[i*4 + 0] = L.lutData[i*3 + 0];
+            rgba[i*4 + 1] = L.lutData[i*3 + 1];
+            rgba[i*4 + 2] = L.lutData[i*3 + 2];
+            rgba[i*4 + 3] = 0.0f;
+        }
+        [tex replaceRegion:MTLRegionMake3D(0,0,0,L.dimension,L.dimension,L.dimension)
+               mipmapLevel:0 slice:0
+                 withBytes:rgba
+               bytesPerRow:(NSUInteger)L.dimension * 4 * sizeof(float)
+             bytesPerImage:(NSUInteger)L.dimension * L.dimension * 4 * sizeof(float)];
+        std::free(rgba);
+
+        {
+            std::lock_guard<std::mutex> lock(g_lutCacheMutex);
+            g_texLUTCache[key] = [tex retain]; // cache owns one retain
+        }
+        return tex; // caller owns this retain and must release
+    };
+
+    auto getOrCreateLUTBuffer = [&](const GPUDispatchDesc::Layer& L) -> id<MTLBuffer> {
+        LUTCacheKey key{L.lutData, (uint16_t)L.dimension, (uint8_t)LUTPathMode::kBuffer, 0};
+        {
+            std::lock_guard<std::mutex> lock(g_lutCacheMutex);
+            auto it = g_bufLUTCache.find(key);
+            if (it != g_bufLUTCache.end()) {
+                return [it->second retain]; // caller releases; cache retains
+            }
+        }
+
+        const NSUInteger layerFloats = (NSUInteger)L.dimension * L.dimension * L.dimension * 3;
+        id<MTLBuffer> buf = [g_device newBufferWithLength:layerFloats * sizeof(float)
+                                                  options:MTLResourceStorageModeShared];
+        if (!buf) return nil;
+        std::memcpy(buf.contents, L.lutData, layerFloats * sizeof(float));
+
+        {
+            std::lock_guard<std::mutex> lock(g_lutCacheMutex);
+            g_bufLUTCache[key] = [buf retain]; // cache owns
+        }
+        return buf; // caller owns this retain and must release
+    };
+
+    // Combined LUT buffer reused (single shared, grows as needed), guarded by mutex.
+    static id<MTLBuffer> g_combinedLutBuf = nil;
+    static NSUInteger    g_combinedLutCap = 0;
+    static std::mutex    g_combinedBufMutex;
+
+    auto AcquireSharedBuffer = [&](id<MTLBuffer>& cached,
+                                   NSUInteger& cap,
+                                   NSUInteger neededBytes,
+                                   const char* tag) -> id<MTLBuffer> {
+        std::lock_guard<std::mutex> lock(g_ioBufMutex);
+        if (!cached || cap < neededBytes) {
+            if (cached) { [cached release]; cached = nil; }
+            cached = [g_device newBufferWithLength:neededBytes
+                                           options:MTLResourceStorageModeShared];
+            cap = cached ? neededBytes : 0;
+#if VTC_METAL_LOG
+            MLOG("IOBUF ALLOC %s %lu bytes", tag, (unsigned long)neededBytes);
+#endif
+        } else {
+#if VTC_METAL_LOG
+            MLOG("IOBUF REUSE %s req=%lu cap=%lu", tag,
+                 (unsigned long)neededBytes, (unsigned long)cap);
+#endif
+        }
+        return cached ? [cached retain] : nil;  // caller releases; cache keeps own retain
+    };
+
     @autoreleasepool {
         ensureTickScale();
-        // MFR baseline: per-dispatch buffers/textures (no shared cache reuse).
 
-        id<MTLBuffer> srcBuf = [g_device newBufferWithLength:srcSize
-                                                     options:MTLResourceStorageModeShared];
-        if (!srcBuf) { MLOG("dispatch fail: srcBuf alloc"); return false; }
-        std::memcpy(srcBuf.contents, srcData, srcSize);
+        // Per-dispatch Metal resources (owned via Create Rule). ARC is OFF.
+        id<MTLBuffer> srcBuf = nil;
+        id<MTLBuffer> dstBuf = nil;
+        id<MTLBuffer> lutBuf = nil;
+        id<MTLTexture> lutTex[4] = { nil, nil, nil, nil };
+        bool success = false;
 
-        id<MTLBuffer> dstBuf = [g_device newBufferWithLength:dstSize
-                                                     options:MTLResourceStorageModeShared];
-        if (!dstBuf) { MLOG("dispatch fail: dstBuf alloc"); return false; }
+        @try {
+            do {
+                srcBuf = AcquireSharedBuffer(g_cachedSrcBuf, g_cachedSrcCap, srcSize, "src");
+                if (!srcBuf) { MLOG("dispatch fail: srcBuf alloc"); break; }
+                std::memcpy(srcBuf.contents, srcData, srcSize);
 
-        id<MTLBuffer> lutBuf = [g_device newBufferWithLength:lutBytes
-                                                     options:MTLResourceStorageModeShared];
-        if (!lutBuf) { MLOG("dispatch fail: lutBuf alloc"); return false; }
+                dstBuf = AcquireSharedBuffer(g_cachedDstBuf, g_cachedDstCap, dstSize, "dst");
+                if (!dstBuf) { MLOG("dispatch fail: dstBuf alloc"); break; }
 
-        float* lutDst = (float*)lutBuf.contents;
-        uint32_t floatOff = 0;
-        for (int i = 0; i < desc.layerCount; i++) {
-            const auto& L = desc.layers[i];
-            NSUInteger layerFloats = (NSUInteger)L.dimension * L.dimension * L.dimension * 3;
-            std::memcpy(lutDst + floatOff, L.lutData, layerFloats * sizeof(float));
-            floatOff += (uint32_t)layerFloats;
-        }
+                lutBuf = [g_device newBufferWithLength:lutBytes
+                                               options:MTLResourceStorageModeShared];
+                if (!lutBuf) { MLOG("dispatch fail: lutBuf alloc"); break; }
 
-        const bool tryTexture = (g_gpuPathMode != GPUPathMode::kForceBuffer);
-        const bool tryBuffer  = (g_gpuPathMode != GPUPathMode::kForceTexture);
-
-        MLOG("path mode: %s  tryTex=%d tryBuf=%d",
-             g_gpuPathMode == GPUPathMode::kAuto ? "Auto" :
-             g_gpuPathMode == GPUPathMode::kForceTexture ? "ForceTexture" : "ForceBuffer",
-             tryTexture, tryBuffer);
-
-        // ── Try 3D texture path ──
-        if (tryTexture) {
-            InitTexturePipeline();
-            if (g_texPipelineOK && g_dummyTex) {
-                id<MTLComputePipelineState> texPso = nil;
-                if (is8bpc)       texPso = g_texPSO_8;
-                else if (is16bpc) texPso = g_texPSO_16;
-                else              texPso = g_texPSO_32f;
-
-                bool texturesReady = true;
-                id<MTLTexture> texArr[4] = {g_dummyTex, g_dummyTex, g_dummyTex, g_dummyTex};
+                float* lutDst = (float*)lutBuf.contents;
+                uint32_t floatOff = 0;
                 for (int i = 0; i < desc.layerCount; i++) {
-                    texArr[i] = createLUTTexture(desc.layers[i].lutData, desc.layers[i].dimension);
-                    if (!texArr[i]) { texturesReady = false; break; }
+                    const auto& L = desc.layers[i];
+                    NSUInteger layerFloats = (NSUInteger)L.dimension * L.dimension * L.dimension * 3;
+                    std::memcpy(lutDst + floatOff, L.lutData, layerFloats * sizeof(float));
+                    floatOff += (uint32_t)layerFloats;
                 }
 
-                if (texturesReady && texPso) {
-                    GPUTexParams texParams = {};
-                    texParams.width      = (uint32_t)w;
-                    texParams.height     = (uint32_t)h;
-                    texParams.srcStride  = (uint32_t)(srcRowBytes / desc.bytesPerPixel);
-                    texParams.dstStride  = (uint32_t)(dstRowBytes / desc.bytesPerPixel);
-                    texParams.layerCount = (uint32_t)desc.layerCount;
+                const bool tryTexture = (g_gpuPathMode != GPUPathMode::kForceBuffer);
+                const bool tryBuffer  = (g_gpuPathMode != GPUPathMode::kForceTexture);
+
+                MLOG("path mode: %s  tryTex=%d tryBuf=%d",
+                     g_gpuPathMode == GPUPathMode::kAuto ? "Auto" :
+                     g_gpuPathMode == GPUPathMode::kForceTexture ? "ForceTexture" : "ForceBuffer",
+                     tryTexture, tryBuffer);
+
+                // ── Try 3D texture path ──
+                if (tryTexture) {
+                    InitTexturePipeline();
+                    if (g_texPipelineOK && g_dummyTex) {
+                        id<MTLComputePipelineState> texPso = nil;
+                        if (is8bpc)       texPso = g_texPSO_8;
+                        else if (is16bpc) texPso = g_texPSO_16;
+                        else              texPso = g_texPSO_32f;
+
+                        bool texturesReady = true;
+                        id<MTLTexture> texArr[4] = {g_dummyTex, g_dummyTex, g_dummyTex, g_dummyTex};
+                        for (int i = 0; i < desc.layerCount; i++) {
+                            texArr[i] = getOrCreateLUTTexture(desc.layers[i]);
+                            lutTex[i] = texArr[i]; // owned; release in finally
+                            if (!texArr[i]) { texturesReady = false; break; }
+                        }
+
+                        if (texturesReady && texPso) {
+                            GPUTexParams texParams = {};
+                            texParams.width      = (uint32_t)w;
+                            texParams.height     = (uint32_t)h;
+                            texParams.srcStride  = (uint32_t)(srcRowBytes / desc.bytesPerPixel);
+                            texParams.dstStride  = (uint32_t)(dstRowBytes / desc.bytesPerPixel);
+                            texParams.layerCount = (uint32_t)desc.layerCount;
+                            for (int i = 0; i < desc.layerCount; i++) {
+                                float d = (float)desc.layers[i].dimension;
+                                texParams.layers[i].coordScale = (d - 1.0f) / d;
+                                texParams.layers[i].coordBias  = 0.5f / d;
+                                texParams.layers[i].intensity  = desc.layers[i].intensity;
+                            }
+
+                            MTIMER_BEGIN;
+                            bool texOK = dispatchTextureKernel(texPso, texParams,
+                                srcBuf, dstBuf, texArr,
+                                w, h, dstSize, dstData);
+                            if (texOK) {
+                                MLOG("RENDERED via TEXTURE: %dx%d %dbpc layers=%d  %.3fms",
+                                     w, h, bpcLabel, desc.layerCount, MTIMER_ELAPSED_MS);
+                                success = true;
+                                break;
+                            }
+                            MLOG("tex dispatch FAILED (%.3fms)", MTIMER_ELAPSED_MS);
+                        } else {
+                            MLOG("tex path skipped: pipeline=%d texturesReady=%d",
+                                 (texPso != nil), texturesReady);
+                        }
+                    } else {
+                        MLOG("tex pipeline not available");
+                    }
+
+                    if (!tryBuffer) {
+                        MLOG("ForceTexture mode: texture failed, falling back to CPU");
+                        break;
+                    }
+                    MLOG("texture path failed -> trying buffer path");
+                }
+
+                // ── Buffer-based GPU LUT path ──
+                GPUParams params = {};
+                params.width      = (uint32_t)w;
+                params.height     = (uint32_t)h;
+                params.layerCount = (uint32_t)desc.layerCount;
+                params.srcStride  = (uint32_t)(srcRowBytes / desc.bytesPerPixel);
+                params.dstStride  = (uint32_t)(dstRowBytes / desc.bytesPerPixel);
+
+                floatOff = 0;
+                for (int i = 0; i < desc.layerCount; i++) {
+                    const auto& L = desc.layers[i];
+                    NSUInteger layerFloats = (NSUInteger)L.dimension * L.dimension * L.dimension * 3;
+                    params.layers[i].lutOffset  = floatOff;
+                    params.layers[i].dimension  = (uint32_t)L.dimension;
+                    params.layers[i].scale      = L.scale;
+                    params.layers[i].intensity  = L.intensity;
+                    floatOff += (uint32_t)layerFloats;
+                }
+
+                // Build/resize combined LUT buffer once; copy LUTs into it (no per-frame allocation).
+                {
+                    std::lock_guard<std::mutex> lock(g_combinedBufMutex);
+                    if (!g_combinedLutBuf || g_combinedLutCap < lutBytes) {
+                        if (g_combinedLutBuf) [g_combinedLutBuf release];
+                        g_combinedLutBuf = [g_device newBufferWithLength:lutBytes
+                                                                 options:MTLResourceStorageModeShared];
+                        g_combinedLutCap = g_combinedLutBuf ? lutBytes : 0;
+                    }
+                    if (!g_combinedLutBuf) { MLOG("dispatch fail: combined lutBuf alloc"); break; }
+                    float* dstLut = (float*)g_combinedLutBuf.contents;
+                    uint32_t off = 0;
                     for (int i = 0; i < desc.layerCount; i++) {
-                        float d = (float)desc.layers[i].dimension;
-                        texParams.layers[i].coordScale = (d - 1.0f) / d;
-                        texParams.layers[i].coordBias  = 0.5f / d;
-                        texParams.layers[i].intensity  = desc.layers[i].intensity;
+                        const auto& L = desc.layers[i];
+                        NSUInteger layerFloats = (NSUInteger)L.dimension * L.dimension * L.dimension * 3;
+                        std::memcpy(dstLut + off, L.lutData, layerFloats * sizeof(float));
+                        off += (uint32_t)layerFloats;
                     }
-
-                    MTIMER_BEGIN;
-                    bool texOK = dispatchTextureKernel(texPso, texParams,
-                        srcBuf, dstBuf, texArr,
-                        w, h, dstSize, dstData);
-                    if (texOK) {
-                        MLOG("RENDERED via TEXTURE: %dx%d %dbpc layers=%d  %.3fms",
-                             w, h, bpcLabel, desc.layerCount, MTIMER_ELAPSED_MS);
-                        return true;
-                    }
-                    MLOG("tex dispatch FAILED (%.3fms)", MTIMER_ELAPSED_MS);
-                } else {
-                    MLOG("tex path skipped: pipeline=%d texturesReady=%d",
-                         (texPso != nil), texturesReady);
+                    lutBuf = [g_combinedLutBuf retain]; // use shared buffer this frame
                 }
-            } else {
-                MLOG("tex pipeline not available");
+
+                MTIMER_BEGIN;
+                bool ok = dispatchKernel(pso, params,
+                                         srcBuf, dstBuf, lutBuf,
+                                         w, h, dstSize, dstData);
+                if (ok) {
+                    MLOG("RENDERED via BUFFER: %dx%d %dbpc layers=%d  %.3fms",
+                         w, h, bpcLabel, desc.layerCount, MTIMER_ELAPSED_MS);
+                } else {
+                    MLOG("buffer dispatch FAILED -> CPU fallback  (%.3fms)",
+                         MTIMER_ELAPSED_MS);
+                }
+                success = ok;
+            } while (false);
+        } @finally {
+            // Create Rule: new/alloc/copy ⇒ we own; release to avoid leaks. ARC is OFF.
+            for (int i = 0; i < 4; i++) {
+                if (lutTex[i] && lutTex[i] != g_dummyTex) {
+                    [lutTex[i] release];
+                    lutTex[i] = nil;
+                }
             }
-
-            if (!tryBuffer) {
-                MLOG("ForceTexture mode: texture failed, falling back to CPU");
-                return false;
-            }
-            MLOG("texture path failed -> trying buffer path");
+            if (lutBuf) { [lutBuf release]; lutBuf = nil; }
+            if (dstBuf) { [dstBuf release]; dstBuf = nil; }
+            if (srcBuf) { [srcBuf release]; srcBuf = nil; }
+            // commandBuffer/encoder are autoreleased (per Metal API); do not release.
         }
 
-        // ── Buffer-based GPU LUT path ──
-        GPUParams params = {};
-        params.width      = (uint32_t)w;
-        params.height     = (uint32_t)h;
-        params.layerCount = (uint32_t)desc.layerCount;
-        params.srcStride  = (uint32_t)(srcRowBytes / desc.bytesPerPixel);
-        params.dstStride  = (uint32_t)(dstRowBytes / desc.bytesPerPixel);
-
-        floatOff = 0;
-        for (int i = 0; i < desc.layerCount; i++) {
-            const auto& L = desc.layers[i];
-            NSUInteger layerFloats = (NSUInteger)L.dimension * L.dimension * L.dimension * 3;
-            params.layers[i].lutOffset  = floatOff;
-            params.layers[i].dimension  = (uint32_t)L.dimension;
-            params.layers[i].scale      = L.scale;
-            params.layers[i].intensity  = L.intensity;
-            floatOff += (uint32_t)layerFloats;
-        }
-
-        MTIMER_BEGIN;
-        bool ok = dispatchKernel(pso, params,
-                                 srcBuf, dstBuf, lutBuf,
-                                 w, h, dstSize, dstData);
-        if (ok) {
-            MLOG("RENDERED via BUFFER: %dx%d %dbpc layers=%d  %.3fms",
-                 w, h, bpcLabel, desc.layerCount, MTIMER_ELAPSED_MS);
-        } else {
-            MLOG("buffer dispatch FAILED -> CPU fallback  (%.3fms)",
-                 MTIMER_ELAPSED_MS);
-        }
-        return ok;
+        return success;
     }
 }
 

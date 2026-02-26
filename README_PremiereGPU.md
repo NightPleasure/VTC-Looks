@@ -85,3 +85,52 @@ With `VTC_PRGPU_DIAG=1`, you'll see on stderr:
 - M2b: LUT 16f path
 - M3: Full stack (4 layers)
 - M4: Optimizations + stability
+
+
+## CPU fallback test mode (macOS Metal locked)
+
+Premiere on macOS may lock renderer to Metal. To test PF CPU fallback anyway:
+
+### Force CPU test mode
+
+Launch Premiere from Terminal with:
+
+```bash
+VTC_FORCE_CPU_TEST=1 VTC_PRGPU_DIAG=1 /Applications/Adobe\ Premiere\ Pro\ 2025/Adobe\ Premiere\ Pro\ 2025.app/Contents/MacOS/Adobe\ Premiere\ Pro\ 2025
+```
+
+Behavior when `VTC_FORCE_CPU_TEST=1`:
+- PrGPU/Metal path refuses initialization so host falls back to PF CPU rendering.
+- CPU path still applies full LUT stack (Log -> Creative -> Secondary -> Accent).
+- With `VTC_PRGPU_DIAG=1`, logs include: `CPU TEST MODE (forced)`.
+- With `VTC_PRGPU_DIAG=1`, a small 2x2 corner marker is added for visual confirmation.
+- Exports follow the same forced CPU behavior.
+
+### Re-enable normal GPU behavior
+
+Unset (or set to `0`) before launching Premiere:
+
+```bash
+unset VTC_FORCE_CPU_TEST
+# or
+VTC_FORCE_CPU_TEST=0 /Applications/Adobe\ Premiere\ Pro\ 2025/Adobe\ Premiere\ Pro\ 2025.app/Contents/MacOS/Adobe\ Premiere\ Pro\ 2025
+```
+
+Default (unset/0) behavior remains unchanged: GPU path is used when Metal is available; PF CPU fallback is used only when GPU path is unavailable.
+
+
+## Clear Premiere plugin cache (after install changes)
+
+If Premiere still shows duplicate effects after deploy, clear plugin cache and relaunch.
+
+1. Quit Premiere completely.
+2. Run:
+
+```bash
+rm -rf "$HOME/Library/Caches/Adobe/Premiere Pro"/*/PluginCache 2>/dev/null || true
+rm -rf "$HOME/Library/Preferences/Adobe/Premiere Pro"/*/PluginCache 2>/dev/null || true
+```
+
+3. Launch Premiere again and re-check the Effects panel.
+
+Expected result after deploy script cleanup: only one VTC effect entry from `VTC_Looks_PrGPU.plugin`.

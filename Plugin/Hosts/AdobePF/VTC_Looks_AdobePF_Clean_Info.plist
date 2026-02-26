@@ -3,22 +3,22 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
-    <string>en</string>
+    <string>English</string>
     <key>CFBundleExecutable</key>
-    <string>VTC_Looks_AdobePF_Clean</string>
+    <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key>
-    <string>com.vtclooks.cpu</string>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>VTC Looks</string>
+    <string>$(PRODUCT_NAME)</string>
     <key>CFBundlePackageType</key>
     <string>BNDL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <key>CFBundleSignature</key>
+    <string>FXTC</string>
     <key>CFBundleVersion</key>
-    <string>1.0.0</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>11.0</string>
+    <string>1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
 </dict>
 </plist>

@@ -6,6 +6,7 @@
 #include <mutex>
 #include <cstring>
 #include <cstdlib>
+#include <pthread.h>
 
 #ifndef VTC_METAL_LOG
 #define VTC_METAL_LOG 0
@@ -55,6 +56,8 @@ static id<MTLBuffer> g_cachedSrcBuf = nil;
 static NSUInteger    g_cachedSrcCap = 0;
 static id<MTLBuffer> g_cachedDstBuf = nil;
 static NSUInteger    g_cachedDstCap = 0;
+// Serialize full dispatch to avoid MFR races on shared buffers/LUTs.
+static std::mutex    g_dispatchMutex;
 // ── Debug: GPU path selection override ───────────────────────────────
 // Controls which GPU LUT path is attempted when Metal is enabled.
 // Auto (default): try texture3d first, fall back to buffer, then CPU.
@@ -682,6 +685,8 @@ bool IsAvailable() {
 bool TryDispatch(const GPUDispatchDesc& desc,
                  const void* srcData, void* dstData,
                  int srcRowBytes, int dstRowBytes) {
+    std::lock_guard<std::mutex> dispatchLock(g_dispatchMutex);
+
     if (!g_available) {
         MLOG("dispatch skip: context unavailable");
         return false;
@@ -750,6 +755,13 @@ bool TryDispatch(const GPUDispatchDesc& desc,
     const NSUInteger srcSize  = (NSUInteger)h * (NSUInteger)srcRowBytes;
     const NSUInteger dstSize  = (NSUInteger)h * (NSUInteger)dstRowBytes;
     const NSUInteger lutBytes = totalLutFloats * sizeof(float);
+
+#if VTC_METAL_LOG
+    uint64_t tid = 0;
+    pthread_threadid_np(nullptr, &tid);
+    MLOG("DISPATCH BEGIN tid=%llu w=%d h=%d bpp=%d srcRB=%d dstRB=%d",
+         (unsigned long long)tid, w, h, desc.bytesPerPixel, srcRowBytes, dstRowBytes);
+#endif
 
     // ── LUT cache (process lifetime; thread-safe with mutex) ──
     enum class LUTPathMode : uint8_t { kBuffer = 0, kTexture = 1 };
@@ -903,6 +915,13 @@ bool TryDispatch(const GPUDispatchDesc& desc,
                     floatOff += (uint32_t)layerFloats;
                 }
 
+#if VTC_METAL_LOG
+                MLOG("DISPATCH RESOURCES tid=%llu srcBuf=%p dstBuf=%p lutBuf=%p srcSize=%lu dstSize=%lu lutBytes=%lu",
+                     (unsigned long long)tid,
+                     (void*)srcBuf, (void*)dstBuf, (void*)lutBuf,
+                     (unsigned long)srcSize, (unsigned long)dstSize, (unsigned long)lutBytes);
+#endif
+
                 const bool tryTexture = (g_gpuPathMode != GPUPathMode::kForceBuffer);
                 const bool tryBuffer  = (g_gpuPathMode != GPUPathMode::kForceTexture);
 
@@ -1035,9 +1054,20 @@ bool TryDispatch(const GPUDispatchDesc& desc,
             // commandBuffer/encoder are autoreleased (per Metal API); do not release.
         }
 
+#if VTC_METAL_LOG
+        uint64_t tid = 0;
+        pthread_threadid_np(nullptr, &tid);
+        MLOG("DISPATCH END   tid=%llu success=%d", (unsigned long long)tid, success ? 1 : 0);
+#endif
+
         return success;
     }
 }
+
+#if VTC_METAL_LOG
+#undef MLOG
+#define MLOG(fmt, ...) std::fprintf(stderr, "[VTC Metal] " fmt "\n", ##__VA_ARGS__)
+#endif
 
 }  // namespace metal
 }  // namespace vtc

@@ -9,6 +9,7 @@
 		AA0001100000000100000001 /* VTC_Looks_PrGPU.mm in Sources */ = {isa = PBXBuildFile; fileRef = AA0001010000000100000001; };
 		AA0001110000000100000001 /* VTC_FrameMap_PrGPU.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AA0001020000000100000001; };
 		AA0001120000000100000001 /* VTC_ParamMap_PrGPU.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AA0001030000000100000001; };
+		AA0001130000000100000001 /* VTC_Looks_PrGPU_PF.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AA0001080000000100000001; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -20,6 +21,7 @@
 		AA0001050000000100000001 /* VTC_Passthrough.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = "../Plugin/Hosts/PremiereGPU/VTC_Passthrough.metal"; sourceTree = SOURCE_ROOT; };
 		AA0001060000000100000001 /* VTC_Looks_PrGPU_PiPL.r */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.rez; path = "../Plugin/Hosts/PremiereGPU/VTC_Looks_PrGPU_PiPL.r"; sourceTree = SOURCE_ROOT; };
 		AA0001070000000100000001 /* VTC_Looks_PrGPU_Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "../Plugin/Hosts/PremiereGPU/VTC_Looks_PrGPU_Info.plist"; sourceTree = SOURCE_ROOT; };
+		AA0001080000000100000001 /* VTC_Looks_PrGPU_PF.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "../Plugin/Hosts/PremiereGPU/VTC_Looks_PrGPU_PF.cpp"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -125,6 +127,7 @@
 				AA0001100000000100000001 /* VTC_Looks_PrGPU.mm in Sources */,
 				AA0001110000000100000001 /* VTC_FrameMap_PrGPU.cpp in Sources */,
 				AA0001120000000100000001 /* VTC_ParamMap_PrGPU.cpp in Sources */,
+			AA0001130000000100000001 /* VTC_Looks_PrGPU_PF.cpp in Sources */,
 			);
 		};
 /* End PBXSourcesBuildPhase section */

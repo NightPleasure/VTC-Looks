@@ -3,6 +3,8 @@
 // Uses PrGPUFilterModule helper from Premiere SDK.
 
 #include "VTC_PrGPU_Includes.h"
+#include "VTC_ParamMap_PrGPU.h"
+#include "VTC_PrGPU_Params.h"
 #include <OpenCL/cl.h>
 
 static size_t DivideRoundUp(size_t v, size_t m) {
@@ -81,6 +83,17 @@ public:
         int bpp = GetGPUBytesPerPixel(pixFmt);
         int pitch = rowBytes / bpp;
         bool is16f = (pixFmt == PrPixelFormat_GPU_BGRA_4444_16f);
+
+        // M1: read params, gate passthrough
+        PrTime seqTime = inRenderParams->inSequenceTime;
+        PrParam enableP = GetParam(vtc::prgpu::kParam_Enable, seqTime);
+        PrParam intenP = GetParam(vtc::prgpu::kParam_Intensity, seqTime);
+        vtc::prgpu::PrGPUParamsSnapshot snap = vtc::prgpu::ReadParamsFromPrParam(enableP, intenP);
+        if (!snap.enable || snap.intensity <= 0.0f) {
+            VTC_PRGPU_LOG("Render: bypass (Enable=%d Intensity=%.2f)", snap.enable ? 1 : 0, snap.intensity);
+        } else {
+            VTC_PRGPU_LOG("Render: Apply Enable=%d Intensity=%.2f (passthrough for M1)", snap.enable ? 1 : 0, snap.intensity);
+        }
 
         VTC_PRGPU_LOG("Render %dx%d rb=%d pitch=%d 16f=%d", width, height, rowBytes, pitch, is16f ? 1 : 0);
 

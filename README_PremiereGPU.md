@@ -2,7 +2,9 @@
 
 ## What is this?
 A separate GPU-accelerated plugin for Premiere Pro using the PrGPU (GPU Extensions) API.
-Currently implements **M0: GPU passthrough** — copies input to output pixel-for-pixel on the GPU via Metal compute shaders.
+- **M0**: GPU passthrough (32f + 16f)
+- **M1**: Params (Enable, Intensity) + gating
+- **M2**: Single-layer LUT (32f only) — kRec709LUTs[0], trilinear sample, intensity blend
 
 The existing AE/PF plugin (`VTC_Looks_AdobePF_Clean`) is completely untouched.
 
@@ -27,8 +29,15 @@ The build automatically:
 - **File → Project Settings → General**
 - **Video Rendering and Playback → Renderer**: choose **Mercury Playback Engine GPU Acceleration (Metal)**
 
-### 2. Enable diagnostic logging
-Before launching Premiere Pro, set the environment variable:
+### 2. Environment variables
+| Var | Purpose |
+|-----|---------|
+| `VTC_PRGPU_DIAG=1` | Diagnostic logs (Initialize, Render, params) |
+| `VTC_PRGPU_DEBUG=1` | LUT cache logs (id, size) |
+| `VTC_PRGPU_PERF=1` | (M4) Per-frame ms |
+
+### 3. Enable diagnostic logging
+Before launching Premiere Pro:
 
 ```bash
 export VTC_PRGPU_DIAG=1
@@ -41,11 +50,11 @@ Or launch from Terminal:
 VTC_PRGPU_DIAG=1 /Applications/Adobe\ Premiere\ Pro\ 2025/Adobe\ Premiere\ Pro\ 2025.app/Contents/MacOS/Adobe\ Premiere\ Pro\ 2025
 ```
 
-### 3. Apply the effect
+### 4. Apply the effect
 - In the Effects panel, search for **VTC Looks GPU** (category: VTC)
 - Apply to a clip and play
 
-### 4. Check logs
+### 5. Check logs
 With `VTC_PRGPU_DIAG=1`, you'll see on stderr:
 
 ```
@@ -56,8 +65,8 @@ With `VTC_PRGPU_DIAG=1`, you'll see on stderr:
 ...
 ```
 
-### 5. Visual check
-Output should match input exactly (passthrough copies pixels 1:1).
+### 6. Visual check
+**32f timeline**: With Enable ON and Intensity > 0, output has LUT applied (VTC Blue Shadows). **16f or bypass**: passthrough.
 
 ## Files
 
@@ -65,13 +74,14 @@ Output should match input exactly (passthrough copies pixels 1:1).
 |------|---------|
 | `Plugin/Hosts/PremiereGPU/VTC_Looks_PrGPU.mm` | GPU filter class + entry point |
 | `Plugin/Hosts/PremiereGPU/VTC_PrGPU_Includes.h` | Shared includes + diagnostic logging |
-| `Plugin/Hosts/PremiereGPU/VTC_Passthrough.metal` | Metal compute kernels (32f + 16f) |
-| `Plugin/Hosts/PremiereGPU/VTC_FrameMap_PrGPU.cpp` | Frame mapping stub (for future LUT) |
-| `Plugin/Hosts/PremiereGPU/VTC_ParamMap_PrGPU.cpp` | Parameter mapping stub (for future LUT) |
+| `Plugin/Hosts/PremiereGPU/VTC_Passthrough.metal` | Metal kernels: passthrough 32f/16f + LUT apply 32f |
+| `Plugin/Core/VTC_LUTData_Rec709_Gen.cpp` | LUT data (kRec709LUTs) |
+| `Plugin/Hosts/PremiereGPU/VTC_ParamMap_PrGPU.cpp` | Param mapping (Enable, Intensity) |
 | `Plugin/Hosts/PremiereGPU/VTC_Looks_PrGPU_PiPL.r` | PiPL resource (Match_Name: com.vtclooks.prgpu) |
 | `Plugin/Hosts/PremiereGPU/VTC_Looks_PrGPU_Info.plist` | Bundle Info.plist |
 | `Build/VTC_Looks_PrGPU.xcodeproj/` | Xcode project (separate from AE build) |
 
 ## Next steps
-- M1: Add LUT rendering (replace passthrough with actual color grading)
-- M2: Add parameter controls for look selection
+- M2b: LUT 16f path
+- M3: Full stack (4 layers)
+- M4: Optimizations + stability

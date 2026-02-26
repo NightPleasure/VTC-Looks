@@ -34,6 +34,15 @@ inline bool DiagEnabled() {
     return s_cached != 0;
 }
 
+inline bool DebugEnabled() {
+    static int s_cached = -1;
+    if (s_cached < 0) {
+        const char* v = std::getenv("VTC_PRGPU_DEBUG");
+        s_cached = (v && v[0] == '1') ? 1 : 0;
+    }
+    return s_cached != 0;
+}
+
 } // namespace vtc_prgpu
 
 #define VTC_PRGPU_LOG(fmt, ...) \

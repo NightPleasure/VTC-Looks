@@ -1,0 +1,283 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		AA0001100000000100000001 /* VTC_Looks_PrGPU.mm in Sources */ = {isa = PBXBuildFile; fileRef = AA0001010000000100000001; };
+		AA0001110000000100000001 /* VTC_FrameMap_PrGPU.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AA0001020000000100000001; };
+		AA0001120000000100000001 /* VTC_ParamMap_PrGPU.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AA0001030000000100000001; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		AA0001000000000100000001 /* VTC_Looks_PrGPU.plugin */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VTC_Looks_PrGPU.plugin; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA0001010000000100000001 /* VTC_Looks_PrGPU.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = "../Plugin/Hosts/PremiereGPU/VTC_Looks_PrGPU.mm"; sourceTree = SOURCE_ROOT; };
+		AA0001020000000100000001 /* VTC_FrameMap_PrGPU.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "../Plugin/Hosts/PremiereGPU/VTC_FrameMap_PrGPU.cpp"; sourceTree = SOURCE_ROOT; };
+		AA0001030000000100000001 /* VTC_ParamMap_PrGPU.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "../Plugin/Hosts/PremiereGPU/VTC_ParamMap_PrGPU.cpp"; sourceTree = SOURCE_ROOT; };
+		AA0001040000000100000001 /* VTC_PrGPU_Includes.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "../Plugin/Hosts/PremiereGPU/VTC_PrGPU_Includes.h"; sourceTree = SOURCE_ROOT; };
+		AA0001050000000100000001 /* VTC_Passthrough.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = "../Plugin/Hosts/PremiereGPU/VTC_Passthrough.metal"; sourceTree = SOURCE_ROOT; };
+		AA0001060000000100000001 /* VTC_Looks_PrGPU_PiPL.r */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.rez; path = "../Plugin/Hosts/PremiereGPU/VTC_Looks_PrGPU_PiPL.r"; sourceTree = SOURCE_ROOT; };
+		AA0001070000000100000001 /* VTC_Looks_PrGPU_Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "../Plugin/Hosts/PremiereGPU/VTC_Looks_PrGPU_Info.plist"; sourceTree = SOURCE_ROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		AA0000E10000000100000001 = {
+			isa = PBXGroup;
+			children = (
+				AA0001010000000100000001,
+				AA0001020000000100000001,
+				AA0001030000000100000001,
+				AA0001040000000100000001,
+				AA0001050000000100000001,
+				AA0001060000000100000001,
+				AA0001070000000100000001,
+				AA0001000000000100000001,
+			);
+			sourceTree = SOURCE_ROOT;
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		AA0000F10000000100000001 /* VTC_Looks_PrGPU */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA0001200000000100000001;
+			buildPhases = (
+				AA0001160000000100000001 /* Compile PiPL */,
+				AA0001170000000100000001 /* Compile Metal */,
+				AA0000F20000000100000001 /* Sources */,
+				AA00012B0000000100000001 /* Deploy to MediaCore (PrGPU) */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = VTC_Looks_PrGPU;
+			productName = VTC_Looks_PrGPU;
+			productReference = AA0001000000000100000001;
+			productType = "com.apple.product-type.bundle";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		AA0000E00000000100000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastUpgradeCheck = 1430;
+				ORGANIZATIONNAME = "VTC";
+			};
+			buildConfigurationList = AA0001210000000100000001;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en);
+			mainGroup = AA0000E10000000100000001;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				AA0000F10000000100000001 /* VTC_Looks_PrGPU */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		AA0001160000000100000001 /* Compile PiPL */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = ();
+			name = "Compile PiPL";
+			outputPaths = ();
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nBASE_SDK=\"${PROJECT_DIR}/../SDKs/Adobe/AfterEffectsSDK_25.6_61_mac/ae25.6_61.64bit.AfterEffectsSDK\"\nAE_SDK_RES=\"${BASE_SDK}/Examples/Resources\"\nRESOURCES_DIR=\"${PROJECT_DIR}/../Plugin/Hosts/PremiereGPU\"\nEMBEDDED_PIPL=\"${PROJECT_DIR}/PiPL_PrGPU.rsrc\"\n\ntouch \"${EMBEDDED_PIPL}\"\n\nxcrun Rez -useDF \\\n    -d MAC_ENV=1 \\\n    -d AE_OS_MAC=1 \\\n    -i \"${AE_SDK_RES}\" \\\n    -i \"${RESOURCES_DIR}\" \\\n    -o \"${EMBEDDED_PIPL}\" \\\n    \"${RESOURCES_DIR}/VTC_Looks_PrGPU_PiPL.r\"\n\nFILE_SIZE=$(stat -f%z \"${EMBEDDED_PIPL}\")\nif [ \"$FILE_SIZE\" -eq 0 ]; then\n    echo \"error: PiPL resource is 0 bytes\" >&2\n    exit 1\nfi\necho \"PiPL OK: ${FILE_SIZE} bytes\"\n";
+		};
+		AA0001170000000100000001 /* Compile Metal */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = ();
+			name = "Compile Metal";
+			outputPaths = ();
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nSRC=\"${PROJECT_DIR}/../Plugin/Hosts/PremiereGPU/VTC_Passthrough.metal\"\nOUT_DIR=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/MetalLib\"\nAIR=\"${TARGET_TEMP_DIR}/VTC_Passthrough.air\"\nMLIB=\"${OUT_DIR}/VTC_Passthrough.metallib\"\n\nmkdir -p \"${OUT_DIR}\"\nxcrun -sdk macosx metal -c -o \"${AIR}\" \"${SRC}\"\nxcrun -sdk macosx metallib -o \"${MLIB}\" \"${AIR}\"\necho \"metallib OK: $(ls -la \"${MLIB}\")\"\n";
+		};
+		AA00012B0000000100000001 /* Deploy to MediaCore (PrGPU) */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = ();
+			name = "Deploy to MediaCore (PrGPU)";
+			outputPaths = ();
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nTARGET_DIR=\"${HOME}/Library/Application Support/Adobe/Common/Plug-ins/7.0/MediaCore/VTC\"\nmkdir -p \"${TARGET_DIR}\"\n\nBUNDLE=\"${TARGET_DIR}/VTC_Looks_PrGPU.plugin\"\nrm -rf \"${BUNDLE}\"\ncp -R \"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.plugin\" \"${BUNDLE}\"\n\n# Copy PiPL resource into bundle\nmkdir -p \"${BUNDLE}/Contents/Resources\"\ncp \"${PROJECT_DIR}/PiPL_PrGPU.rsrc\" \"${BUNDLE}/Contents/Resources/${EXECUTABLE_NAME}.rsrc\"\n\nchmod -R 755 \"${BUNDLE}\"\nxattr -cr \"${BUNDLE}\" || true\ncodesign --force --deep -s - \"${BUNDLE}\" || true\n\necho \"Deployed: ${BUNDLE}\"\nfile \"${BUNDLE}/Contents/MacOS/${EXECUTABLE_NAME}\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AA0000F20000000100000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA0001100000000100000001 /* VTC_Looks_PrGPU.mm in Sources */,
+				AA0001110000000100000001 /* VTC_FrameMap_PrGPU.cpp in Sources */,
+				AA0001120000000100000001 /* VTC_ParamMap_PrGPU.cpp in Sources */,
+			);
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		AA0001220000000100000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				AE_SDK_ROOT = "/Users/victorbarbaian/Local Projects/VTC Looks/SDKs/Adobe/AfterEffectsSDK_25.6_61_mac/ae25.6_61.64bit.AfterEffectsSDK";
+				PR_SDK_ROOT = "/Users/victorbarbaian/Local Projects/VTC Looks/SDKs/Adobe/Premiere Pro SDK/Mac/Premiere Pro 26.0 C++ SDK";
+				ARCHS = arm64;
+				CLANG_ENABLE_OBJC_ARC = NO;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_CXX_LIBRARY = "libc++";
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				DEAD_CODE_STRIPPING = YES;
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+				);
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"$(AE_SDK_ROOT)/Examples/Headers\"",
+					"\"$(AE_SDK_ROOT)/Examples/Headers/SP\"",
+					"\"$(AE_SDK_ROOT)/Examples/Util\"",
+					"\"$(PR_SDK_ROOT)/Examples/Headers\"",
+					"\"$(PR_SDK_ROOT)/Examples/Projects/GPUVideoFilter/Utils\"",
+					"\"$(PROJECT_DIR)/../Plugin/Shared\"",
+					"\"$(PROJECT_DIR)/../Plugin/Core\"",
+					"\"$(PROJECT_DIR)/../Plugin/Hosts/PremiereGPU\"",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"\"$(AE_SDK_ROOT)/Libraries/Mac\"",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 11.0;
+				OTHER_LDFLAGS = (
+					"-bundle",
+					"-Xlinker",
+					"-sectcreate",
+					"-Xlinker",
+					"__TEXT",
+					"-Xlinker",
+					"__aepi",
+					"-Xlinker",
+					"${PROJECT_DIR}/PiPL_PrGPU.rsrc",
+					"-framework",
+					Metal,
+					"-framework",
+					Foundation,
+					"-framework",
+					CoreFoundation,
+				);
+				PRODUCT_NAME = "VTC_Looks_PrGPU";
+				SDKROOT = macosx;
+				WRAPPER_EXTENSION = plugin;
+				INFOPLIST_FILE = "../Plugin/Hosts/PremiereGPU/VTC_Looks_PrGPU_Info.plist";
+				MACH_O_TYPE = mh_bundle;
+			};
+			name = Debug;
+		};
+		AA0001230000000100000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				AE_SDK_ROOT = "/Users/victorbarbaian/Local Projects/VTC Looks/SDKs/Adobe/AfterEffectsSDK_25.6_61_mac/ae25.6_61.64bit.AfterEffectsSDK";
+				PR_SDK_ROOT = "/Users/victorbarbaian/Local Projects/VTC Looks/SDKs/Adobe/Premiere Pro SDK/Mac/Premiere Pro 26.0 C++ SDK";
+				ARCHS = arm64;
+				CLANG_ENABLE_OBJC_ARC = NO;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_CXX_LIBRARY = "libc++";
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				DEAD_CODE_STRIPPING = YES;
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+				);
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"$(AE_SDK_ROOT)/Examples/Headers\"",
+					"\"$(AE_SDK_ROOT)/Examples/Headers/SP\"",
+					"\"$(AE_SDK_ROOT)/Examples/Util\"",
+					"\"$(PR_SDK_ROOT)/Examples/Headers\"",
+					"\"$(PR_SDK_ROOT)/Examples/Projects/GPUVideoFilter/Utils\"",
+					"\"$(PROJECT_DIR)/../Plugin/Shared\"",
+					"\"$(PROJECT_DIR)/../Plugin/Core\"",
+					"\"$(PROJECT_DIR)/../Plugin/Hosts/PremiereGPU\"",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"\"$(AE_SDK_ROOT)/Libraries/Mac\"",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 11.0;
+				OTHER_LDFLAGS = (
+					"-bundle",
+					"-Xlinker",
+					"-sectcreate",
+					"-Xlinker",
+					"__TEXT",
+					"-Xlinker",
+					"__aepi",
+					"-Xlinker",
+					"${PROJECT_DIR}/PiPL_PrGPU.rsrc",
+					"-framework",
+					Metal,
+					"-framework",
+					Foundation,
+					"-framework",
+					CoreFoundation,
+				);
+				PRODUCT_NAME = "VTC_Looks_PrGPU";
+				SDKROOT = macosx;
+				WRAPPER_EXTENSION = plugin;
+				INFOPLIST_FILE = "../Plugin/Hosts/PremiereGPU/VTC_Looks_PrGPU_Info.plist";
+			};
+			name = Release;
+		};
+		AA0001240000000100000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+			};
+			name = Debug;
+		};
+		AA0001250000000100000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		AA0001200000000100000001 /* Build configuration list for PBXNativeTarget "VTC_Looks_PrGPU" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0001220000000100000001 /* Debug */,
+				AA0001230000000100000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA0001210000000100000001 /* Build configuration list for PBXProject "VTC_Looks_PrGPU" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0001240000000100000001 /* Debug */,
+				AA0001250000000100000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+	};
+	rootObject = AA0000E00000000100000001 /* Project object */;
+}

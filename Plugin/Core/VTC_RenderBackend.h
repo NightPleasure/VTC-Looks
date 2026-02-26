@@ -1,5 +1,7 @@
 #pragma once
 #include "VTC_MetalBootstrap.h"
+#include <cstdlib>
+#include <cstring>
 
 namespace vtc {
 
@@ -14,6 +16,11 @@ enum class RenderBackend {
 };
 
 inline RenderBackend SelectBackend() {
+    const char* forceCPU = std::getenv("VTC_FALLBACK_FORCE_CPU");
+    if (forceCPU && (std::strcmp(forceCPU, "1") == 0 || std::strcmp(forceCPU, "true") == 0 || std::strcmp(forceCPU, "TRUE") == 0)) {
+        return RenderBackend::kCPU;
+    }
+
     if constexpr (kEnableExperimentalMetal) {
         if (metal::IsAvailable()) return RenderBackend::kMetalGPU;
     }

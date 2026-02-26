@@ -6,6 +6,7 @@
 #include <mutex>
 #include <cstring>
 #include <cstdlib>
+#include <pthread.h>
 
 #ifndef VTC_METAL_LOG
 #define VTC_METAL_LOG 0
@@ -49,6 +50,7 @@ bool                        g_pipeline16OK = false;
 bool                        g_pipeline32OK = false;
 dispatch_once_t             g_ctxOnce;
 dispatch_once_t             g_psoOnce;
+static std::mutex           g_dispatchMutex;
 // I/O buffer cache (shared, thread-safe). ARC is off; cache holds one retain.
 static std::mutex   g_ioBufMutex;
 static id<MTLBuffer> g_cachedSrcBuf = nil;
@@ -687,6 +689,17 @@ bool TryDispatch(const GPUDispatchDesc& desc,
         return false;
     }
 
+    std::lock_guard<std::mutex> dispatchLock(g_dispatchMutex);
+#if VTC_METAL_LOG
+    uint64_t tid = 0;
+    pthread_threadid_np(nullptr, &tid);
+    const char* modeStr = (g_gpuPathMode == GPUPathMode::kAuto)
+                            ? "Auto"
+                            : (g_gpuPathMode == GPUPathMode::kForceTexture ? "ForceTexture" : "ForceBuffer");
+    MLOG("DISPATCH BEGIN tid=%llu mode=%s w=%d h=%d",
+         static_cast<unsigned long long>(tid), modeStr, desc.frameWidth, desc.frameHeight);
+#endif
+
     if (desc.layerCount < 1 || desc.layerCount > GPUDispatchDesc::kMaxLayers) {
         MLOG("dispatch skip: layerCount=%d out of range", desc.layerCount);
         return false;
@@ -1008,6 +1021,11 @@ bool TryDispatch(const GPUDispatchDesc& desc,
                     lutBuf = [g_combinedLutBuf retain]; // use shared buffer this frame
                 }
 
+#if VTC_METAL_LOG
+                MLOG("buffers tid=%llu src=%p dst=%p lut=%p", static_cast<unsigned long long>(tid),
+                     srcBuf, dstBuf, lutBuf);
+#endif
+
                 MTIMER_BEGIN;
                 bool ok = dispatchKernel(pso, params,
                                          srcBuf, dstBuf, lutBuf,
@@ -1034,6 +1052,10 @@ bool TryDispatch(const GPUDispatchDesc& desc,
             if (srcBuf) { [srcBuf release]; srcBuf = nil; }
             // commandBuffer/encoder are autoreleased (per Metal API); do not release.
         }
+
+#if VTC_METAL_LOG
+        MLOG("DISPATCH END tid=%llu ok=%d", static_cast<unsigned long long>(tid), success ? 1 : 0);
+#endif
 
         return success;
     }

@@ -1,5 +1,4 @@
 #include "VTC_LUTSampling.h"
-#include "VTC_RenderBackend.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -16,19 +15,25 @@ inline float lerp(float a, float b, float t) {
     return a + (b - a) * t;
 }
 
-struct Pixel8  { std::uint8_t  a, r, g, b; };
-struct Pixel16 { std::uint16_t a, r, g, b; };
-struct Pixel32f { float a, r, g, b; };
+struct Pixel8 {
+    std::uint8_t r, g, b, a;
+};
+struct Pixel16 {
+    std::uint16_t r, g, b, a;
+};
+struct Pixel32f {
+    float r, g, b, a;
+};
 
 struct ResolvedLayer {
     const float* data;
-    int   dimension;
+    int dimension;
     float scale;
     float intensity;
 };
 
 inline RGB sampleLUTFast(const ResolvedLayer& layer, float r, float g, float b) {
-    const int dim   = layer.dimension;
+    const int dim = layer.dimension;
     const int dimM1 = dim - 1;
 
     const float x = clamp01(r) * layer.scale;
@@ -85,13 +90,11 @@ inline RGB sampleLUTFast(const ResolvedLayer& layer, float r, float g, float b) 
     return {lerp(c0.r, c1.r, fz), lerp(c0.g, c1.g, fz), lerp(c0.b, c1.b, fz)};
 }
 
-inline RGB sampleLUT(const ResolvedLayer& layer, float r, float g, float b) {
-    return sampleLUTFast(layer, r, g, b);
-}
-
 inline RGB applyLayer(const ResolvedLayer& layer, RGB color) {
-    const RGB lutRGB = sampleLUT(layer, color.r, color.g, color.b);
-    if (layer.intensity >= 0.9999f) return lutRGB;
+    const RGB lutRGB = sampleLUTFast(layer, color.r, color.g, color.b);
+    if (layer.intensity >= 0.9999f) {
+        return lutRGB;
+    }
     return {lerp(color.r, lutRGB.r, layer.intensity),
             lerp(color.g, lutRGB.g, layer.intensity),
             lerp(color.b, lutRGB.b, layer.intensity)};
@@ -101,29 +104,34 @@ inline RGB toFloat8(const Pixel8& p) {
     constexpr float k = 1.0f / 255.0f;
     return {p.r * k, p.g * k, p.b * k};
 }
+
 inline RGB toFloat16(const Pixel16& p) {
     constexpr float k = 1.0f / 32768.0f;
     return {p.r * k, p.g * k, p.b * k};
 }
+
 inline RGB toFloat32(const Pixel32f& p) {
     return {p.r, p.g, p.b};
 }
+
 inline Pixel8 fromFloat8(const RGB& c, std::uint8_t a) {
     auto toU8 = [](float v) -> std::uint8_t {
         const float cl = clamp01(v) * 255.0f + 0.5f;
         return static_cast<std::uint8_t>(cl > 255.0f ? 255.0f : cl);
     };
-    return {a, toU8(c.r), toU8(c.g), toU8(c.b)};
+    return {toU8(c.r), toU8(c.g), toU8(c.b), a};
 }
+
 inline Pixel16 fromFloat16(const RGB& c, std::uint16_t a) {
     auto toU16 = [](float v) -> std::uint16_t {
         const float cl = clamp01(v) * 32768.0f + 0.5f;
         return static_cast<std::uint16_t>(cl > 32768.0f ? 32768.0f : cl);
     };
-    return {a, toU16(c.r), toU16(c.g), toU16(c.b)};
+    return {toU16(c.r), toU16(c.g), toU16(c.b), a};
 }
+
 inline Pixel32f fromFloat32(const RGB& c, float a) {
-    return {a, clamp01(c.r), clamp01(c.g), clamp01(c.b)};
+    return {clamp01(c.r), clamp01(c.g), clamp01(c.b), a};
 }
 
 struct ActiveLayers {
@@ -131,56 +139,46 @@ struct ActiveLayers {
     int count = 0;
 
     void tryAdd(const LayerParams& lp, const LUT3D* table, int tableCount) {
-        if (!lp.enabled || lp.lutIndex < 0 || lp.lutIndex >= tableCount
-            || lp.intensity <= 0.0001f)
+        if (!lp.enabled || lp.lutIndex < 0 || lp.lutIndex >= tableCount || lp.intensity <= 0.0001f) {
             return;
+        }
         const LUT3D& lut = table[lp.lutIndex];
         ResolvedLayer& rl = layers[count++];
-        rl.data      = lut.data;
+        rl.data = lut.data;
         rl.dimension = lut.dimension;
-        rl.scale     = static_cast<float>(lut.dimension - 1);
+        rl.scale = static_cast<float>(lut.dimension - 1);
         rl.intensity = clamp01(lp.intensity);
     }
 
-    bool any() const { return count > 0; }
+    bool any() const {
+        return count > 0;
+    }
 };
-
-GPUDispatchDesc BuildGPUDesc(const ActiveLayers& al, const FrameDesc& src) {
-    GPUDispatchDesc desc{};
-    desc.layerCount  = al.count;
-    desc.frameWidth  = src.width;
-    desc.frameHeight = src.height;
-    switch (src.format) {
-        case FrameFormat::kRGBA_8u:  desc.bytesPerPixel = 4;  break;
-        case FrameFormat::kRGBA_16u: desc.bytesPerPixel = 8;  break;
-        case FrameFormat::kRGBA_32f: desc.bytesPerPixel = 16; break;
-    }
-    for (int i = 0; i < al.count; ++i) {
-        desc.layers[i].lutData   = al.layers[i].data;
-        desc.layers[i].dimension = al.layers[i].dimension;
-        desc.layers[i].scale     = al.layers[i].scale;
-        desc.layers[i].intensity = al.layers[i].intensity;
-    }
-    return desc;
-}
 
 template <int LayerCount>
 inline RGB processPixelN(RGB color, const ActiveLayers& al) {
-    if constexpr (LayerCount >= 1) color = applyLayer(al.layers[0], color);
-    if constexpr (LayerCount >= 2) color = applyLayer(al.layers[1], color);
-    if constexpr (LayerCount >= 3) color = applyLayer(al.layers[2], color);
-    if constexpr (LayerCount >= 4) color = applyLayer(al.layers[3], color);
+    if constexpr (LayerCount >= 1) {
+        color = applyLayer(al.layers[0], color);
+    }
+    if constexpr (LayerCount >= 2) {
+        color = applyLayer(al.layers[1], color);
+    }
+    if constexpr (LayerCount >= 3) {
+        color = applyLayer(al.layers[2], color);
+    }
+    if constexpr (LayerCount >= 4) {
+        color = applyLayer(al.layers[3], color);
+    }
     return color;
 }
 
 template <int LayerCount, typename PixelType, typename ToFloatFn, typename FromFloatFn>
-void processTypedN(const ActiveLayers& al, const FrameDesc& src, FrameDesc& dst,
-                   ToFloatFn toFloat, FromFloatFn fromFloat) {
+void processTypedN(const ActiveLayers& al, const FrameDesc& src, FrameDesc& dst, ToFloatFn toFloat, FromFloatFn fromFloat) {
     const auto* srcBytes = static_cast<const std::uint8_t*>(src.data);
     auto* dstBytes = static_cast<std::uint8_t*>(dst.data);
     for (int y = 0; y < src.height; ++y) {
-        const auto* __restrict srcRow = reinterpret_cast<const PixelType*>(srcBytes + y * src.rowBytes);
-        auto* __restrict dstRow = reinterpret_cast<PixelType*>(dstBytes + y * dst.rowBytes);
+        const auto* srcRow = reinterpret_cast<const PixelType*>(srcBytes + y * src.rowBytes);
+        auto* dstRow = reinterpret_cast<PixelType*>(dstBytes + y * dst.rowBytes);
         for (int x = 0; x < src.width; ++x) {
             const PixelType& s = srcRow[x];
             RGB color = processPixelN<LayerCount>(toFloat(s), al);
@@ -193,51 +191,68 @@ void processTypedN(const ActiveLayers& al, const FrameDesc& src, FrameDesc& dst,
 
 void ProcessFrameCPU(const ParamsSnapshot& params, const FrameDesc& src, FrameDesc& dst) {
     if (!IsSupported(src) || !IsSupported(dst) || !SameGeometry(src, dst)) {
-        CopyFrame(src, dst); return;
+        CopyFrame(src, dst);
+        return;
     }
 
-    // Resolve active layers (order: Log -> Creative -> Secondary -> Accent)
     ActiveLayers al;
-    al.tryAdd(params.logConvert, kLogLUTs,    kLogLUTCount);
-    al.tryAdd(params.creative,   kRec709LUTs, kRec709LUTCount);
-    al.tryAdd(params.secondary,  kRec709LUTs, kRec709LUTCount);
-    al.tryAdd(params.accent,     kRec709LUTs, kRec709LUTCount);
+    al.tryAdd(params.logConvert, kLogLUTs, kLogLUTCount);
+    al.tryAdd(params.creative, kRec709LUTs, kRec709LUTCount);
+    al.tryAdd(params.secondary, kRec709LUTs, kRec709LUTCount);
+    al.tryAdd(params.accent, kRec709LUTs, kRec709LUTCount);
 
-    if (!al.any()) { CopyFrame(src, dst); return; }
-
-    // Backend dispatch: when kEnableExperimentalMetal == false, the compiler
-    // eliminates this entire block via if-constexpr dead-code removal.
-    if (SelectBackend() == RenderBackend::kMetalGPU) {
-        GPUDispatchDesc desc = BuildGPUDesc(al, src);
-        if (metal::TryDispatch(desc, src.data, dst.data, src.rowBytes, dst.rowBytes))
-            return;
-        // TryDispatch returned false -- fall through to CPU
+    if (!al.any()) {
+        CopyFrame(src, dst);
+        return;
     }
 
-    // CPU path (default and permanent fallback)
     switch (src.format) {
         case FrameFormat::kRGBA_8u:
             switch (al.count) {
-                case 1: processTypedN<1, Pixel8>(al, src, dst, toFloat8, fromFloat8); break;
-                case 2: processTypedN<2, Pixel8>(al, src, dst, toFloat8, fromFloat8); break;
-                case 3: processTypedN<3, Pixel8>(al, src, dst, toFloat8, fromFloat8); break;
-                default: processTypedN<4, Pixel8>(al, src, dst, toFloat8, fromFloat8); break;
+                case 1:
+                    processTypedN<1, Pixel8>(al, src, dst, toFloat8, fromFloat8);
+                    break;
+                case 2:
+                    processTypedN<2, Pixel8>(al, src, dst, toFloat8, fromFloat8);
+                    break;
+                case 3:
+                    processTypedN<3, Pixel8>(al, src, dst, toFloat8, fromFloat8);
+                    break;
+                default:
+                    processTypedN<4, Pixel8>(al, src, dst, toFloat8, fromFloat8);
+                    break;
             }
             break;
         case FrameFormat::kRGBA_16u:
             switch (al.count) {
-                case 1: processTypedN<1, Pixel16>(al, src, dst, toFloat16, fromFloat16); break;
-                case 2: processTypedN<2, Pixel16>(al, src, dst, toFloat16, fromFloat16); break;
-                case 3: processTypedN<3, Pixel16>(al, src, dst, toFloat16, fromFloat16); break;
-                default: processTypedN<4, Pixel16>(al, src, dst, toFloat16, fromFloat16); break;
+                case 1:
+                    processTypedN<1, Pixel16>(al, src, dst, toFloat16, fromFloat16);
+                    break;
+                case 2:
+                    processTypedN<2, Pixel16>(al, src, dst, toFloat16, fromFloat16);
+                    break;
+                case 3:
+                    processTypedN<3, Pixel16>(al, src, dst, toFloat16, fromFloat16);
+                    break;
+                default:
+                    processTypedN<4, Pixel16>(al, src, dst, toFloat16, fromFloat16);
+                    break;
             }
             break;
         case FrameFormat::kRGBA_32f:
             switch (al.count) {
-                case 1: processTypedN<1, Pixel32f>(al, src, dst, toFloat32, fromFloat32); break;
-                case 2: processTypedN<2, Pixel32f>(al, src, dst, toFloat32, fromFloat32); break;
-                case 3: processTypedN<3, Pixel32f>(al, src, dst, toFloat32, fromFloat32); break;
-                default: processTypedN<4, Pixel32f>(al, src, dst, toFloat32, fromFloat32); break;
+                case 1:
+                    processTypedN<1, Pixel32f>(al, src, dst, toFloat32, fromFloat32);
+                    break;
+                case 2:
+                    processTypedN<2, Pixel32f>(al, src, dst, toFloat32, fromFloat32);
+                    break;
+                case 3:
+                    processTypedN<3, Pixel32f>(al, src, dst, toFloat32, fromFloat32);
+                    break;
+                default:
+                    processTypedN<4, Pixel32f>(al, src, dst, toFloat32, fromFloat32);
+                    break;
             }
             break;
     }

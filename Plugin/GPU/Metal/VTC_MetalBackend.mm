@@ -34,6 +34,10 @@ id<MTLDevice> gDevice = nil;
 id<MTLLibrary> gLib = nil;
 id<MTLComputePipelineState> gPass = nil;
 id<MTLComputePipelineState> gApply = nil;
+id<MTLBuffer> gLUTCacheBuffer = nil;
+std::vector<uint32_t> gLogLUTOffsets;
+std::vector<uint32_t> gRec709LUTOffsets;
+
 std::once_flag gInit;
 std::mutex gMutex;
 
@@ -181,6 +185,37 @@ void initPipeline(id<MTLCommandQueue> q) {
       metalDiagLog("Apply init err: %s",
                    [[error localizedDescription] UTF8String]);
     }
+
+    // Allocate persistent LUT cache buffer
+    uint32_t totalFloats = 0;
+    std::vector<float> allLUTData;
+
+    auto appendLUTs = [&](const LUT3D *table, int n,
+                          std::vector<uint32_t> &offsets) {
+      for (int i = 0; i < n; ++i) {
+        const LUT3D &lut = table[i];
+        const int lutValues = lut.dimension * lut.dimension * lut.dimension * 3;
+        offsets.push_back(totalFloats);
+        allLUTData.insert(allLUTData.end(), lut.data, lut.data + lutValues);
+        totalFloats += lutValues;
+      }
+    };
+
+    gLogLUTOffsets.reserve(kLogLUTCount);
+    gRec709LUTOffsets.reserve(kRec709LUTCount);
+
+    appendLUTs(kLogLUTs, kLogLUTCount, gLogLUTOffsets);
+    appendLUTs(kRec709LUTs, kRec709LUTCount, gRec709LUTOffsets);
+
+    if (totalFloats > 0) {
+      gLUTCacheBuffer =
+          [gDevice newBufferWithBytes:allLUTData.data()
+                               length:totalFloats * sizeof(float)
+                              options:MTLResourceStorageModeShared];
+      if (!gLUTCacheBuffer) {
+        metalDiagLog("Could not allocate LUT cache buffer");
+      }
+    }
   });
 }
 
@@ -206,29 +241,27 @@ bool blitCopy(id<MTLCommandQueue> q, id<MTLBuffer> srcBuf, id<MTLBuffer> dstBuf,
 }
 
 void buildLayers(const ParamsSnapshot &p, std::array<LayerInfo, 4> &layers,
-                 std::vector<float> &lutData, uint32_t &count) {
+                 uint32_t &count) {
   count = 0;
-  lutData.clear();
-  auto add = [&](const LayerParams &lp, const LUT3D *table, int n) {
+  auto add = [&](const LayerParams &lp, const LUT3D *table, int n,
+                 const std::vector<uint32_t> &offsets) {
     if (!lp.enabled || lp.lutIndex < 0 || lp.lutIndex >= n ||
         lp.intensity <= 0.0001f) {
       return;
     }
     const LUT3D &lut = table[lp.lutIndex];
     LayerInfo info{};
-    info.offset = static_cast<uint32_t>(lutData.size());
+    info.offset = offsets[lp.lutIndex];
     info.dim = static_cast<uint32_t>(lut.dimension);
     info.scale = static_cast<float>(lut.dimension - 1);
     info.intensity =
         lp.intensity < 0.f ? 0.f : (lp.intensity > 1.f ? 1.f : lp.intensity);
-    const int lutValues = lut.dimension * lut.dimension * lut.dimension * 3;
-    lutData.insert(lutData.end(), lut.data, lut.data + lutValues);
     layers[count++] = info;
   };
-  add(p.logConvert, kLogLUTs, kLogLUTCount);
-  add(p.creative, kRec709LUTs, kRec709LUTCount);
-  add(p.secondary, kRec709LUTs, kRec709LUTCount);
-  add(p.accent, kRec709LUTs, kRec709LUTCount);
+  add(p.logConvert, kLogLUTs, kLogLUTCount, gLogLUTOffsets);
+  add(p.creative, kRec709LUTs, kRec709LUTCount, gRec709LUTOffsets);
+  add(p.secondary, kRec709LUTs, kRec709LUTCount, gRec709LUTOffsets);
+  add(p.accent, kRec709LUTs, kRec709LUTCount, gRec709LUTOffsets);
 }
 
 } // namespace
@@ -303,24 +336,13 @@ bool TryDispatchNative(const ParamsSnapshot &params, const FrameDesc &src,
       std::memcpy([srcBuf contents], src.data, srcBytes);
 
       std::array<LayerInfo, 4> layers{};
-      std::vector<float> lutData;
       uint32_t layerCount = 0;
-      buildLayers(params, layers, lutData, layerCount);
+      buildLayers(params, layers, layerCount);
 
       const MetalParams p{static_cast<uint32_t>(src.width),
                           static_cast<uint32_t>(src.height),
                           static_cast<uint32_t>(src.rowBytes),
                           static_cast<uint32_t>(dst.rowBytes), layerCount};
-
-      id<MTLBuffer> pbuf =
-          [gDevice newBufferWithBytes:&p
-                               length:sizeof(MetalParams)
-                              options:MTLResourceStorageModeShared];
-      if (!pbuf) {
-        if (reason)
-          *reason = "params_buffer_failed";
-        return false;
-      }
 
       id<MTLCommandBuffer> cb = [q commandBuffer];
       id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
@@ -328,24 +350,18 @@ bool TryDispatchNative(const ParamsSnapshot &params, const FrameDesc &src,
       [enc setComputePipelineState:pso];
       [enc setBuffer:srcBuf offset:0 atIndex:0];
       [enc setBuffer:dstBuf offset:0 atIndex:1];
-      [enc setBuffer:pbuf offset:0 atIndex:2];
+      [enc setBytes:&p length:sizeof(MetalParams) atIndex:2];
 
       if (layerCount > 0) {
-        id<MTLBuffer> lbuf =
-            [gDevice newBufferWithBytes:layers.data()
-                                 length:sizeof(LayerInfo) * layerCount
-                                options:MTLResourceStorageModeShared];
-        id<MTLBuffer> tbuf =
-            [gDevice newBufferWithBytes:lutData.data()
-                                 length:sizeof(float) * lutData.size()
-                                options:MTLResourceStorageModeShared];
-        if (!lbuf || !tbuf) {
+        if (!gLUTCacheBuffer) {
           if (reason)
-            *reason = "lut_buffer_failed";
+            *reason = "lut_cache_missing";
           return false;
         }
-        [enc setBuffer:lbuf offset:0 atIndex:3];
-        [enc setBuffer:tbuf offset:0 atIndex:4];
+        [enc setBytes:layers.data()
+               length:sizeof(LayerInfo) * layerCount
+              atIndex:3];
+        [enc setBuffer:gLUTCacheBuffer offset:0 atIndex:4];
       }
 
       MTLSize grid = MTLSizeMake(p.width, p.height, 1);
@@ -453,9 +469,8 @@ bool TryDispatchNativeBuffers(const ParamsSnapshot &params,
       }
 
       std::array<LayerInfo, 4> layers{};
-      std::vector<float> lutData;
       uint32_t layerCount = 0;
-      buildLayers(params, layers, lutData, layerCount);
+      buildLayers(params, layers, layerCount);
 
       const MetalParams p{static_cast<uint32_t>(width),
                           static_cast<uint32_t>(height),
@@ -478,24 +493,18 @@ bool TryDispatchNativeBuffers(const ParamsSnapshot &params,
       [enc setComputePipelineState:pso];
       [enc setBuffer:srcBuf offset:0 atIndex:0];
       [enc setBuffer:dstBuf offset:0 atIndex:1];
-      [enc setBuffer:pbuf offset:0 atIndex:2];
+      [enc setBytes:&p length:sizeof(MetalParams) atIndex:2];
 
       if (layerCount > 0) {
-        id<MTLBuffer> lbuf =
-            [gDevice newBufferWithBytes:layers.data()
-                                 length:sizeof(LayerInfo) * layerCount
-                                options:MTLResourceStorageModeShared];
-        id<MTLBuffer> tbuf =
-            [gDevice newBufferWithBytes:lutData.data()
-                                 length:sizeof(float) * lutData.size()
-                                options:MTLResourceStorageModeShared];
-        if (!lbuf || !tbuf) {
+        if (!gLUTCacheBuffer) {
           if (reason)
-            *reason = "lut_buffer_failed";
+            *reason = "lut_cache_missing";
           return false;
         }
-        [enc setBuffer:lbuf offset:0 atIndex:3];
-        [enc setBuffer:tbuf offset:0 atIndex:4];
+        [enc setBytes:layers.data()
+               length:sizeof(LayerInfo) * layerCount
+              atIndex:3];
+        [enc setBuffer:gLUTCacheBuffer offset:0 atIndex:4];
       }
 
       MTLSize grid = MTLSizeMake(p.width, p.height, 1);

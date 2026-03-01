@@ -6,22 +6,26 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		OF0001100000000100000001 /* VTC_Looks_OFX.cpp in Sources */ = {isa = PBXBuildFile; fileRef = OF0001010000000100000001; };
+		OF0001100000000100000001 /* VTC_Looks_OFX.mm in Sources */ = {isa = PBXBuildFile; fileRef = OF0001010000000100000001; };
 		OF0001110000000100000001 /* VTC_ParamMap_OFX.cpp in Sources */ = {isa = PBXBuildFile; fileRef = OF0001020000000100000001; };
-		OF0001120000000100000001 /* VTC_FrameMap_OFX.cpp in Sources */ = {isa = PBXBuildFile; fileRef = OF0001030000000100000001; };
+		OF0001120000000100000001 /* VTC_OFX_ImageMap.cpp in Sources */ = {isa = PBXBuildFile; fileRef = OF0001030000000100000001; };
 		OF0001130000000100000001 /* VTC_LUTSampling.cpp in Sources */ = {isa = PBXBuildFile; fileRef = OF0001040000000100000001; };
-		OF0001140000000100000001 /* VTC_EmbeddedLUTs.cpp in Sources */ = {isa = PBXBuildFile; fileRef = OF0001050000000100000001; };
-		OF0001150000000100000001 /* VTC_MetalBootstrap.mm in Sources */ = {isa = PBXBuildFile; fileRef = OF0001060000000100000001; };
+		OF0001140000000100000001 /* VTC_LUTRegistry.cpp in Sources */ = {isa = PBXBuildFile; fileRef = OF0001050000000100000001; };
+		OF0001150000000100000001 /* VTC_LUTData_Log_Gen.cpp in Sources */ = {isa = PBXBuildFile; fileRef = OF0001060000000100000001; };
+		OF0001160000000100000001 /* VTC_LUTData_Rec709_Gen.cpp in Sources */ = {isa = PBXBuildFile; fileRef = OF0001070000000100000001; };
+		OF0001260000000100000001 /* VTC_MetalBackend.mm in Sources */ = {isa = PBXBuildFile; fileRef = OF0001270000000100000001; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		OF0001000000000100000001 /* VTC_Looks.ofx.bundle */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "VTC_Looks.ofx.bundle"; sourceTree = BUILT_PRODUCTS_DIR; };
-		OF0001010000000100000001 /* VTC_Looks_OFX.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "../Plugin/Hosts/OFX/VTC_Looks_OFX.cpp"; sourceTree = SOURCE_ROOT; };
+		OF0001010000000100000001 /* VTC_Looks_OFX.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = "../Plugin/Hosts/OFX/VTC_Looks_OFX.mm"; sourceTree = SOURCE_ROOT; };
 		OF0001020000000100000001 /* VTC_ParamMap_OFX.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "../Plugin/Hosts/OFX/VTC_ParamMap_OFX.cpp"; sourceTree = SOURCE_ROOT; };
-		OF0001030000000100000001 /* VTC_FrameMap_OFX.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "../Plugin/Hosts/OFX/VTC_FrameMap_OFX.cpp"; sourceTree = SOURCE_ROOT; };
+		OF0001030000000100000001 /* VTC_OFX_ImageMap.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "../Plugin/Hosts/OFX/VTC_OFX_ImageMap.cpp"; sourceTree = SOURCE_ROOT; };
 		OF0001040000000100000001 /* VTC_LUTSampling.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "../Plugin/Core/VTC_LUTSampling.cpp"; sourceTree = SOURCE_ROOT; };
-		OF0001050000000100000001 /* VTC_EmbeddedLUTs.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "../Plugin/Core/VTC_EmbeddedLUTs.cpp"; sourceTree = SOURCE_ROOT; };
-		OF0001060000000100000001 /* VTC_MetalBootstrap.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = "../Plugin/Core/VTC_MetalBootstrap.mm"; sourceTree = SOURCE_ROOT; };
+		OF0001050000000100000001 /* VTC_LUTRegistry.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "../Plugin/Core/VTC_LUTRegistry.cpp"; sourceTree = SOURCE_ROOT; };
+		OF0001060000000100000001 /* VTC_LUTData_Log_Gen.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "../Plugin/Core/VTC_LUTData_Log_Gen.cpp"; sourceTree = SOURCE_ROOT; };
+		OF0001070000000100000001 /* VTC_LUTData_Rec709_Gen.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "../Plugin/Core/VTC_LUTData_Rec709_Gen.cpp"; sourceTree = SOURCE_ROOT; };
+		OF0001270000000100000001 /* VTC_MetalBackend.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = "../Plugin/GPU/Metal/VTC_MetalBackend.mm"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -34,6 +38,8 @@
 				OF0001040000000100000001,
 				OF0001050000000100000001,
 				OF0001060000000100000001,
+				OF0001070000000100000001,
+				OF0001270000000100000001,
 				OF0001000000000100000001,
 			);
 			sourceTree = SOURCE_ROOT;
@@ -83,7 +89,7 @@
 			outputPaths = ();
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\nDEST=\"/Library/OFX/Plugins\"\nmkdir -p \"$DEST\"\nBUNDLE=\"$DEST/VTC_Looks.ofx.bundle\"\nrm -rf \"$BUNDLE\"\ncp -R \"${BUILT_PRODUCTS_DIR}/VTC_Looks.ofx.bundle\" \"$BUNDLE\"\n\n# Bundle LUT files so plugin is self-contained.\nLUT_SRC=\"/Users/victorbarbaian/Local Projects/VTC/VTC Pack/LUTs\"\nLUT_DST=\"$BUNDLE/Contents/Resources/LUTs\"\nrm -rf \"$LUT_DST\"\nmkdir -p \"$LUT_DST\"\ncp -R \"$LUT_SRC/Log\" \"$LUT_DST/\"\ncp -R \"$LUT_SRC/Rec 709\" \"$LUT_DST/\"\n\nLOG_COUNT=$(ls \"$LUT_DST/Log/\"*.cube 2>/dev/null | wc -l | tr -d ' ')\nREC_COUNT=$(ls \"$LUT_DST/Rec 709/\"*.cube \"$LUT_DST/Rec 709/\"*.CUBE 2>/dev/null | wc -l | tr -d ' ')\necho \"LUTs bundled: Log=$LOG_COUNT Rec709=$REC_COUNT\"\nif [ \"$LOG_COUNT\" -eq 0 ] || [ \"$REC_COUNT\" -eq 0 ]; then\n  echo \"error: LUT files missing after copy\" >&2\n  exit 1\nfi\n\nchmod -R 755 \"$BUNDLE\"\nxattr -cr \"$BUNDLE\" 2>/dev/null || true\ncodesign --force --deep -s - \"$BUNDLE\" 2>/dev/null || true\necho \"Deployed: $BUNDLE\"\nfile \"$BUNDLE/Contents/MacOS/VTC_Looks.ofx\"\n";
+		shellScript = "set -e\nBUNDLE_NAME=VTC_Looks.ofx.bundle\nDEST=\"/Library/OFX/Plugins\"\nUSER_DEST=\"$HOME/Library/OFX/Plugins\"\nmkdir -p \"$DEST\"\nrm -rf \"$USER_DEST/$BUNDLE_NAME\" 2>/dev/null || true\nBUNDLE=\"$DEST/$BUNDLE_NAME\"\nrm -rf \"$BUNDLE\"\ncp -R \"${BUILT_PRODUCTS_DIR}/$BUNDLE_NAME\" \"$BUNDLE\"\nchmod -R 755 \"$BUNDLE\"\nxattr -cr \"$BUNDLE\" 2>/dev/null || true\ncodesign --force --deep -s - \"$BUNDLE\" 2>/dev/null || true\necho \"Deployed: $BUNDLE\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -98,6 +104,8 @@
 				OF0001130000000100000001,
 				OF0001140000000100000001,
 				OF0001150000000100000001,
+				OF0001160000000100000001,
+				OF0001260000000100000001,
 			);
 		};
 /* End PBXSourcesBuildPhase section */
@@ -107,7 +115,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				OFX_SDK_ROOT = "$(PROJECT_DIR)/../SDKs/OFX/OpenFX Mac";
-				ARCHS = arm64;
+				ARCHS = "arm64";
 				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				CLANG_CXX_LIBRARY = "libc++";
 				CLANG_ENABLE_OBJC_ARC = NO;
@@ -126,7 +134,7 @@
 				LIBRARY_SEARCH_PATHS = (
 					"\"$(OFX_SDK_ROOT)/lib\"",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 11.0;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				OTHER_LDFLAGS = (
 					"-bundle",
 					"-framework",
@@ -137,7 +145,7 @@
 					CoreFoundation,
 					"-lOfxSupport",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "com.vtclooks.ofx";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.vtclooks.ofx.v2";
 				PRODUCT_NAME = "VTC_Looks.ofx";
 				SDKROOT = macosx;
 				WRAPPER_EXTENSION = bundle;
@@ -150,7 +158,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				OFX_SDK_ROOT = "$(PROJECT_DIR)/../SDKs/OFX/OpenFX Mac";
-				ARCHS = arm64;
+				ARCHS = "arm64";
 				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				CLANG_CXX_LIBRARY = "libc++";
 				CLANG_ENABLE_OBJC_ARC = NO;
@@ -169,7 +177,7 @@
 				LIBRARY_SEARCH_PATHS = (
 					"\"$(OFX_SDK_ROOT)/lib\"",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 11.0;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				OTHER_LDFLAGS = (
 					"-bundle",
 					"-framework",
@@ -180,7 +188,7 @@
 					CoreFoundation,
 					"-lOfxSupport",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "com.vtclooks.ofx";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.vtclooks.ofx.v2";
 				PRODUCT_NAME = "VTC_Looks.ofx";
 				SDKROOT = macosx;
 				WRAPPER_EXTENSION = bundle;

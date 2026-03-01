@@ -1,13 +1,9 @@
-#import <Foundation/Foundation.h>
-#import <Metal/Metal.h>
-
 #include "VTC_MetalBackend.h"
-
 #include "../../Core/VTC_CopyUtils.h"
-#include "../../Shared/VTC_LUTData.h"
-
+#include "../../Core/VTC_LUTRegistry.h"
+#import <Metal/Metal.h>
+#include <algorithm>
 #include <array>
-#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -54,6 +50,10 @@ static NSString *const kShaderSource = @R"(
 using namespace metal;
 
 struct MetalParams {
+    uint width;
+    uint height;
+    uint srcRowBytes;
+    uint dstRowBytes;
     uint layerCount;
 };
 
@@ -92,24 +92,29 @@ inline float3 sampleLUT3D(device const float* lut, int dim, float r, float g, fl
 }
 
 kernel void vtc_passthrough_32f(
-    texture2d<float, access::read>  src [[texture(0)]],
-    texture2d<float, access::write> dst [[texture(1)]],
+    device const float4*           src    [[buffer(0)]],
+    device float4*                 dst    [[buffer(1)]],
+    constant MetalParams&          p      [[buffer(2)]],
     uint2 gid [[thread_position_in_grid]])
 {
-    if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
-    dst.write(src.read(gid), gid);
+    if (gid.x >= p.width || gid.y >= p.height) return;
+    uint srcIdx = (gid.y * p.srcRowBytes) / 16 + gid.x;
+    uint dstIdx = (gid.y * p.dstRowBytes) / 16 + gid.x;
+    dst[dstIdx] = src[srcIdx];
 }
 
 kernel void vtc_apply_32f(
-    texture2d<float, access::read>  src    [[texture(0)]],
-    texture2d<float, access::write> dst    [[texture(1)]],
-    constant MetalParams&           p      [[buffer(0)]],
-    constant LayerInfo*             layers [[buffer(1)]],
-    device const float*             lutBuf [[buffer(2)]],
+    device const float4*           src    [[buffer(0)]],
+    device float4*                 dst    [[buffer(1)]],
+    constant MetalParams&          p      [[buffer(2)]],
+    constant LayerInfo*            layers [[buffer(3)]],
+    device const float*            lutBuf [[buffer(4)]],
     uint2 gid [[thread_position_in_grid]])
 {
-    if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
-    float4 c = src.read(gid);
+    if (gid.x >= p.width || gid.y >= p.height) return;
+    uint srcIdx = (gid.y * p.srcRowBytes) / 16 + gid.x;
+    uint dstIdx = (gid.y * p.dstRowBytes) / 16 + gid.x;
+    float4 c = src[srcIdx];
     float r = c.x, g = c.y, b = c.z;
     for (uint i = 0; i < p.layerCount && i < 4; ++i) {
         float3 lutRGB = sampleLUT3D(lutBuf + layers[i].offset,
@@ -118,7 +123,7 @@ kernel void vtc_apply_32f(
         g = mix(g, lutRGB.y, layers[i].intensity);
         b = mix(b, lutRGB.z, layers[i].intensity);
     }
-    dst.write(float4(r, g, b, c.w), gid);
+    dst[dstIdx] = float4(r, g, b, c.w);
 }
 )";
 
@@ -139,69 +144,61 @@ void initPipeline(id<MTLCommandQueue> q) {
   std::call_once(gInit, [&]() {
     gDevice = q.device;
     if (!gDevice) {
-      metalDiagLog("q.device is null");
+      metalDiagLog("Device is nil");
       return;
     }
-    // Compile shaders from source at runtime (OFX plugins can't use
-    // newDefaultLibrary — it only searches the main app bundle).
-    NSError *e = nil;
-    MTLCompileOptions *opts = [[MTLCompileOptions alloc] init];
-    opts.languageVersion = MTLLanguageVersion2_0;
-    gLib = [gDevice newLibraryWithSource:kShaderSource options:opts error:&e];
+
+    NSError *error = nil;
+    MTLCompileOptions *options = [MTLCompileOptions new];
+    options.fastMathEnabled = YES;
+
+    gLib = [gDevice newLibraryWithSource:kShaderSource
+                                 options:options
+                                   error:&error];
     if (!gLib) {
-      metalDiagLog("shader compile failed: %s",
-                   e ? [[e localizedDescription] UTF8String] : "unknown");
+      metalDiagLog("Could not load library from source: %s",
+                   error ? [[error localizedDescription] UTF8String]
+                         : "unknown error");
       return;
     }
-    e = nil;
-    id<MTLFunction> passFn = [gLib newFunctionWithName:@"vtc_passthrough_32f"];
-    id<MTLFunction> applyFn = [gLib newFunctionWithName:@"vtc_apply_32f"];
-    if (!passFn || !applyFn) {
-      metalDiagLog("kernel functions not found");
+
+    id<MTLFunction> fPass = [gLib newFunctionWithName:@"vtc_passthrough_32f"];
+    id<MTLFunction> fApp = [gLib newFunctionWithName:@"vtc_apply_32f"];
+
+    if (!fPass || !fApp) {
+      metalDiagLog("Functions not found pass=%d app=%d", fPass != nil,
+                   fApp != nil);
       return;
     }
-    gPass = [gDevice newComputePipelineStateWithFunction:passFn error:&e];
-    if (!gPass || e) {
-      metalDiagLog("pass pipeline failed: %s",
-                   e ? [[e localizedDescription] UTF8String] : "unknown");
-      return;
+
+    gPass = [gDevice newComputePipelineStateWithFunction:fPass error:&error];
+    if (error) {
+      metalDiagLog("Pass init err: %s",
+                   [[error localizedDescription] UTF8String]);
     }
-    e = nil;
-    gApply = [gDevice newComputePipelineStateWithFunction:applyFn error:&e];
-    if (!gApply || e) {
-      metalDiagLog("apply pipeline failed: %s",
-                   e ? [[e localizedDescription] UTF8String] : "unknown");
-      return;
+    gApply = [gDevice newComputePipelineStateWithFunction:fApp error:&error];
+    if (error) {
+      metalDiagLog("Apply init err: %s",
+                   [[error localizedDescription] UTF8String]);
     }
-    metalDiagLog("pipeline initialized OK");
   });
 }
 
-// Blit fallback: copy src texture to dst texture when compute pipeline is
-// unavailable. Ensures video passes through without white screen.
-bool blitCopy(id<MTLCommandQueue> q, id<MTLTexture> srcTex,
-              id<MTLTexture> dstTex) {
-  if (!q || !srcTex || !dstTex)
+bool blitCopy(id<MTLCommandQueue> q, id<MTLBuffer> srcBuf, id<MTLBuffer> dstBuf,
+              size_t length) {
+  if (!q || !srcBuf || !dstBuf)
     return false;
+
   id<MTLCommandBuffer> cb = [q commandBuffer];
-  if (!cb)
-    return false;
   id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
   if (!blit)
     return false;
 
-  MTLSize size = MTLSizeMake(std::min(srcTex.width, dstTex.width),
-                             std::min(srcTex.height, dstTex.height), 1);
-  [blit copyFromTexture:srcTex
-            sourceSlice:0
-            sourceLevel:0
-           sourceOrigin:MTLOriginMake(0, 0, 0)
-             sourceSize:size
-              toTexture:dstTex
-       destinationSlice:0
-       destinationLevel:0
-      destinationOrigin:MTLOriginMake(0, 0, 0)];
-
+  [blit copyFromBuffer:srcBuf
+           sourceOffset:0
+               toBuffer:dstBuf
+      destinationOffset:0
+                   size:length];
   [blit endEncoding];
   [cb commit];
   [cb waitUntilCompleted];
@@ -428,11 +425,11 @@ bool TryDispatchNativeBuffers(const ParamsSnapshot &params,
   }
 
   id<MTLCommandQueue> q = (__bridge id<MTLCommandQueue>)nativeCommandQueue;
-  id<MTLTexture> srcTex = (__bridge id<MTLTexture>)srcMetalBuffer;
-  id<MTLTexture> dstTex = (__bridge id<MTLTexture>)dstMetalBuffer;
-  if (!q || !srcTex || !dstTex) {
+  id<MTLBuffer> srcBuf = (__bridge id<MTLBuffer>)srcMetalBuffer;
+  id<MTLBuffer> dstBuf = (__bridge id<MTLBuffer>)dstMetalBuffer;
+  if (!q || !srcBuf || !dstBuf) {
     if (reason)
-      *reason = "texture_bridge_failed";
+      *reason = "buffer_bridge_failed";
     return false;
   }
 
@@ -442,7 +439,8 @@ bool TryDispatchNativeBuffers(const ParamsSnapshot &params,
       initPipeline(q);
       if (!gDevice || !gPass || !gApply) {
         // Pipeline unavailable — fall back to blit copy to avoid white screen.
-        if (blitCopy(q, srcTex, dstTex)) {
+        size_t copyLen = std::min(srcBuf.length, dstBuf.length);
+        if (blitCopy(q, srcBuf, dstBuf, copyLen)) {
           if (usedGPU)
             *usedGPU = true;
           if (reason)
@@ -459,7 +457,10 @@ bool TryDispatchNativeBuffers(const ParamsSnapshot &params,
       uint32_t layerCount = 0;
       buildLayers(params, layers, lutData, layerCount);
 
-      const MetalParams p{layerCount};
+      const MetalParams p{static_cast<uint32_t>(width),
+                          static_cast<uint32_t>(height),
+                          static_cast<uint32_t>(srcRowBytes),
+                          static_cast<uint32_t>(dstRowBytes), layerCount};
 
       id<MTLBuffer> pbuf =
           [gDevice newBufferWithBytes:&p
@@ -475,10 +476,9 @@ bool TryDispatchNativeBuffers(const ParamsSnapshot &params,
       id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
       id<MTLComputePipelineState> pso = (layerCount == 0) ? gPass : gApply;
       [enc setComputePipelineState:pso];
-
-      [enc setTexture:srcTex atIndex:0];
-      [enc setTexture:dstTex atIndex:1];
-      [enc setBuffer:pbuf offset:0 atIndex:0];
+      [enc setBuffer:srcBuf offset:0 atIndex:0];
+      [enc setBuffer:dstBuf offset:0 atIndex:1];
+      [enc setBuffer:pbuf offset:0 atIndex:2];
 
       if (layerCount > 0) {
         id<MTLBuffer> lbuf =
@@ -494,11 +494,11 @@ bool TryDispatchNativeBuffers(const ParamsSnapshot &params,
             *reason = "lut_buffer_failed";
           return false;
         }
-        [enc setBuffer:lbuf offset:0 atIndex:1];
-        [enc setBuffer:tbuf offset:0 atIndex:2];
+        [enc setBuffer:lbuf offset:0 atIndex:3];
+        [enc setBuffer:tbuf offset:0 atIndex:4];
       }
 
-      MTLSize grid = MTLSizeMake(dstTex.width, dstTex.height, 1);
+      MTLSize grid = MTLSizeMake(p.width, p.height, 1);
       NSUInteger tw = pso.threadExecutionWidth;
       if (!tw)
         tw = 8;
@@ -522,21 +522,11 @@ bool TryDispatchNativeBuffers(const ParamsSnapshot &params,
       if (reason)
         *reason = (layerCount == 0) ? "metal_passthrough" : "metal_apply";
 
-      if (envEnabled("VTC_DIAG")) {
-        static std::atomic<bool> once{false};
-        bool expected = false;
-        if (once.compare_exchange_strong(expected, true)) {
-          std::fprintf(
-              stderr,
-              "[VTC][diag] Native Metal path (host buffers) active (%s)\n",
-              (layerCount == 0 ? "passthrough" : "lut_apply"));
-        }
-      }
       return true;
     } @catch (NSException *e) {
-      (void)e;
       if (reason)
         *reason = "objc_exception";
+      metalDiagLog("Caught exception: %s", [[e reason] UTF8String]);
       return false;
     }
   } catch (...) {
